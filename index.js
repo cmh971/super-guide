@@ -71,6 +71,13 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
     }
 
+    // Verification button (must run before the staff-only button gate below)
+    if (interaction.isButton() && interaction.customId === 'verify_start') {
+        const verifyCmd = client.commands.get('verify');
+        if (verifyCmd?.handleVerifyButton) return verifyCmd.handleVerifyButton(interaction);
+        return;
+    }
+
     // 2. Ticket Creation (Select Menu)
     if (interaction.isStringSelectMenu() && interaction.customId === 'ticket_select') {
         const category = interaction.values[0];
@@ -284,7 +291,14 @@ client.on(Events.InteractionCreate, async interaction => {
 
 // --- Global Message Handler ---
 client.on(Events.MessageCreate, async message => {
-    if (message.author.bot || !message.guild) return;
+    if (message.author.bot) return;
+
+    // Verification captcha replies come in via DM (no guild).
+    if (!message.guild) {
+        const verifyCmd = client.commands.get('verify');
+        if (verifyCmd?.handleVerifyDM) await verifyCmd.handleVerifyDM(message, client);
+        return;
+    }
 
     // 1. Ticket Transcripts
     const ticket = await Ticket.findOne({ channelId: message.channelId });
@@ -299,6 +313,12 @@ client.on(Events.MessageCreate, async message => {
         if (afkCommand.checkAndClearAfk) await afkCommand.checkAndClearAfk(message);
         if (message.mentions.users.size > 0 && afkCommand.checkMentions) await afkCommand.checkMentions(message);
     }
+});
+
+// --- Auto-verify bots (they can't click buttons / spell captchas) ---
+client.on(Events.GuildMemberAdd, async member => {
+    const verifyCmd = client.commands.get('verify');
+    if (verifyCmd?.autoVerifyBot) await verifyCmd.autoVerifyBot(member);
 });
 
 client.once(Events.ClientReady, async c => {
