@@ -1,0 +1,10 @@
+node_modules/
+# build artifacts from the polyglot helpers
+helpers/go-health/healthmon
+helpers/go-health/healthmon.exe
+helpers/cpp-crypto/crypto
+helpers/cpp-crypto/crypto.exe
+helpers/cpp-crypto/build/
+helpers/csharp-loganalyzer/bin/
+helpers/csharp-loganalyzer/obj/
+helpers/csharp-loganalyzer/report.html

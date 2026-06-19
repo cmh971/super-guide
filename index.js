@@ -1,7 +1,7 @@
 require('dotenv').config();
 const fs = require('node:fs');
 const path = require('node:path');
-const { Client, Collection, Events, GatewayIntentBits, EmbedBuilder, ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle, PermissionFlagsBits, MessageFlags, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
+const { Client, Collection, Events, GatewayIntentBits, Partials, EmbedBuilder, ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle, PermissionFlagsBits, MessageFlags, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
 const mongoose = require('mongoose');
 
 // --- Configuration & Models ---
@@ -34,7 +34,16 @@ const appSchema = new mongoose.Schema({
 });
 const StaffApp = mongoose.models.StaffApp || mongoose.model('StaffApp', appSchema);
 
-const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMembers] });
+const client = new Client({
+    intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.MessageContent,
+        GatewayIntentBits.GuildMembers,
+        GatewayIntentBits.DirectMessages // needed to receive the verification captcha reply in DMs
+    ],
+    partials: [Partials.Channel] // DM channels arrive as partials; without this, DM messages are dropped
+});
 client.commands = new Collection();
 
 // --- Command Loader (Moved to Top) ---
@@ -331,6 +340,14 @@ client.once(Events.ClientReady, async c => {
         if (giveawayCmd?.restoreActiveGiveaways) {
             await giveawayCmd.restoreActiveGiveaways(client);
             console.log('Restored active giveaways.');
+        }
+
+        // Staff dashboard bridge: DM server-picker + dashboard command executor.
+        // Lives under /dashboard so the command loader above never touches it.
+        try {
+            require('./dashboard/src/bot-integration').init(client);
+        } catch (err) {
+            console.error('Failed to start dashboard bridge:', err.message);
         }
     }
 });

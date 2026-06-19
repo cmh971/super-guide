@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Choose a Server — California State Roleplay Staff</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/css/style.css" />
+</head>
+<body>
+  <div class="grid-overlay"></div>
+  <div class="center-screen">
+    <main class="card select-wrap">
+      <div class="logo-orb">📨</div>
+      <h1 class="title">Check your Discord DMs</h1>
+      <p class="subtitle">
+        We've asked the bot to message you. Open Discord and tap the server you
+        want to manage — this page unlocks automatically the moment you choose.
+      </p>
+
+      <div class="spinner" id="spinner"></div>
+      <p class="info" id="statusText" style="color: var(--text-dim); font-size: 13px;">
+        Waiting for you to pick a server in Discord…
+      </p>
+
+      <div class="server-grid" id="serverPreview"></div>
+
+      <div style="margin-top: 26px; display: flex; gap: 12px; justify-content: center; flex-wrap: wrap;">
+        <button class="btn" id="resendBtn">📨 Resend DM</button>
+        <button class="btn btn-ghost" id="logoutBtn">Log out</button>
+      </div>
+    </main>
+  </div>
+  <div class="toast-wrap" id="toasts"></div>
+  <script src="/static/js/common.js"></script>
+  <script src="/static/js/select.js"></script>
+</body>
+</html>
