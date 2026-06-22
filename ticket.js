@@ -19,6 +19,15 @@ const Ticket = mongoose.models.Ticket || mongoose.model('Ticket', ticketSchema);
 
 const STAFF_ROLE_ID = '1516775846822547465';
 
+// Same config schema as index.js / ticketconfig.js (guarded against re-compile).
+const ticketConfigSchema = new mongoose.Schema({
+    guildId: { type: String, unique: true },
+    staffRoleId: String,
+    staffRoleId2: String,
+    categoryId: String
+});
+const TicketConfig = mongoose.models.TicketConfig || mongoose.model('TicketConfig', ticketConfigSchema);
+
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('ticket')
@@ -40,7 +49,10 @@ module.exports = {
             return interaction.reply({ content: '❌ This channel is not an active ticket.', ephemeral: true });
         }
 
-        const isStaff = interaction.member.roles.cache.has(STAFF_ROLE_ID);
+        // Staff = anyone with a configured ticket role (or the legacy default).
+        const cfg = await TicketConfig.findOne({ guildId: interaction.guildId }).catch(() => null);
+        const staffRoleIds = [cfg?.staffRoleId, cfg?.staffRoleId2, STAFF_ROLE_ID].filter(Boolean);
+        const isStaff = staffRoleIds.some(id => interaction.member.roles.cache.has(id));
 
         if (sub === 'claim') {
             if (!isStaff) return interaction.reply({ content: '❌ Only staff can claim tickets.', ephemeral: true });

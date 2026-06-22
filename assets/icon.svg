@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Lockdown icon for California State Roleplay.
+  Discord emojis must be PNG/GIF, so export this to a 128x128 PNG
+  (e.g. at https://svgtopng.com) and upload it as the :notallowed: emoji.
+-->
+<svg width="128" height="128" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="128" y2="128" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ef4444"/>
+      <stop offset="1" stop-color="#b91c1c"/>
+    </linearGradient>
+  </defs>
+
+  <!-- rounded red background -->
+  <rect x="4" y="4" width="120" height="120" rx="28" fill="url(#bg)"/>
+
+  <!-- lock shackle -->
+  <path d="M44 58V44a20 20 0 0 1 40 0v14" stroke="#fff" stroke-width="8" stroke-linecap="round"/>
+
+  <!-- lock body -->
+  <rect x="34" y="58" width="60" height="46" rx="10" fill="#fff"/>
+
+  <!-- keyhole -->
+  <circle cx="64" cy="78" r="7" fill="#b91c1c"/>
+  <rect x="61" y="80" width="6" height="16" rx="3" fill="#b91c1c"/>
+</svg>

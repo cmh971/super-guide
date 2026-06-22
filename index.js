@@ -8,6 +8,21 @@ const mongoose = require('mongoose');
 const STAFF_ROLE_ID = '1516775846822547465';
 const LOG_CHANNEL_ID = '1516775848194347193';
 
+// Text shortcodes the bot auto-converts in normal messages, e.g. :alarm: -> 🚨.
+// (Discord emojis must be PNG/GIF, so these map to Unicode equivalents.)
+const EMOJI_MAP = {
+    notallowed: '🚫', alarm: '🚨', space: '　', arrowright: '➡️',
+    lock: '🔒', unlock: '🔓', warning: '⚠️', check: '✅', cross: '❌',
+    fire: '🔥', star: '⭐', heart: '❤️', tada: '🎉', eyes: '👀',
+    skull: '💀', think: '🤔', wave: '👋', rocket: '🚀', pin: '📌',
+    bell: '🔔', shield: '🛡️', crown: '👑'
+};
+
+// Replace :code: shortcodes, but never touch real custom emoji like <:name:123>.
+function convertEmojiCodes(text) {
+    return text.replace(/(?<!<):([a-z0-9_]+):(?!\d+>)/gi, (m, name) => EMOJI_MAP[name.toLowerCase()] ?? m);
+}
+
 const ticketSchema = new mongoose.Schema({
     guildId: String,
     channelId: String,
@@ -33,6 +48,17 @@ const appSchema = new mongoose.Schema({
     step: { type: Number, default: 1 }
 });
 const StaffApp = mongoose.models.StaffApp || mongoose.model('StaffApp', appSchema);
+
+// Per-guild ticket configuration set via /ticketconfig. staffRoleId is the
+// PRIMARY role (pinged + the channel is locked to it); staffRoleId2 is an
+// optional second role that also gets access. categoryId is where new tickets open.
+const ticketConfigSchema = new mongoose.Schema({
+    guildId: { type: String, unique: true },
+    staffRoleId: String,
+    staffRoleId2: String,
+    categoryId: String
+});
+const TicketConfig = mongoose.models.TicketConfig || mongoose.model('TicketConfig', ticketConfigSchema);
 
 const client = new Client({
     intents: [
@@ -92,27 +118,45 @@ client.on(Events.InteractionCreate, async interaction => {
         const category = interaction.values[0];
         await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
 
-        let parent = interaction.guild.channels.cache.find(c => c.name === 'Support Tickets' && c.type === ChannelType.GuildCategory);
-        if (!parent) {
-            parent = await interaction.guild.channels.create({
-                name: 'Support Tickets',
-                type: ChannelType.GuildCategory,
-                permissionOverwrites: [
-                    { id: interaction.guild.id, deny: [PermissionFlagsBits.ViewChannel] },
-                    { id: STAFF_ROLE_ID, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] }
-                ]
-            });
+        // Load this guild's ticket config (set via /ticketconfig). The PRIMARY
+        // staff role is pinged and the channel is locked to it; an optional
+        // second role also gets access. Falls back to the legacy STAFF_ROLE_ID.
+        const cfg = await TicketConfig.findOne({ guildId: interaction.guildId }).catch(() => null);
+        const primaryRoleId = cfg?.staffRoleId || STAFF_ROLE_ID;
+        const secondRoleId = cfg?.staffRoleId2 || null;
+
+        // Build the permission overwrites: hide from @everyone, allow the opener,
+        // allow the primary staff role, and the second role if one is configured.
+        const overwrites = [
+            { id: interaction.guild.id, deny: [PermissionFlagsBits.ViewChannel] },
+            { id: interaction.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] },
+            { id: primaryRoleId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] }
+        ];
+        if (secondRoleId) {
+            overwrites.push({ id: secondRoleId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] });
+        }
+
+        // Resolve the category: the configured one if it still exists, otherwise
+        // fall back to a "Support Tickets" category (created if missing).
+        let parent = cfg?.categoryId
+            ? interaction.guild.channels.cache.get(cfg.categoryId)
+            : null;
+        if (!parent || parent.type !== ChannelType.GuildCategory) {
+            parent = interaction.guild.channels.cache.find(c => c.name === 'Support Tickets' && c.type === ChannelType.GuildCategory);
+            if (!parent) {
+                parent = await interaction.guild.channels.create({
+                    name: 'Support Tickets',
+                    type: ChannelType.GuildCategory,
+                    permissionOverwrites: overwrites
+                });
+            }
         }
 
         const channel = await interaction.guild.channels.create({
             name: `${category.toLowerCase()}-${interaction.user.username}`,
             type: ChannelType.GuildText,
             parent: parent.id,
-            permissionOverwrites: [
-                { id: interaction.guild.id, deny: [PermissionFlagsBits.ViewChannel] },
-                { id: interaction.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] },
-                { id: STAFF_ROLE_ID, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] }
-            ]
+            permissionOverwrites: overwrites
         });
 
         await Ticket.create({
@@ -133,7 +177,8 @@ client.on(Events.InteractionCreate, async interaction => {
             new ButtonBuilder().setCustomId('close_ticket').setLabel('Close').setStyle(ButtonStyle.Danger)
         );
 
-        await channel.send({ content: `<@&${STAFF_ROLE_ID}> ${interaction.user}`, embeds: [embed], components: [buttons] });
+        // Ping the primary staff role + the opener.
+        await channel.send({ content: `<@&${primaryRoleId}> ${interaction.user}`, embeds: [embed], components: [buttons] });
         return interaction.editReply(`Ticket created: ${channel}`);
     }
 
@@ -298,15 +343,63 @@ client.on(Events.InteractionCreate, async interaction => {
     }
 });
 
+// Repost a member's message (as them, via webhook) with emoji shortcodes
+// converted. Returns true if it reposted, false if the caller should fall back.
+async function repostWithEmojis(message, converted) {
+    const channel = message.channel;
+    let target = channel;
+    let threadId;
+    if (channel.isThread?.()) { threadId = channel.id; target = channel.parent; }
+    if (!target?.fetchWebhooks) return false;
+
+    const hooks = await target.fetchWebhooks().catch(() => null);
+    let hook = hooks?.find(h => h.name === 'CSRP-Emoji' && h.owner?.id === client.user.id);
+    if (!hook) hook = await target.createWebhook({ name: 'CSRP-Emoji' }).catch(() => null);
+    if (!hook) return false;
+
+    const sent = await hook.send({
+        content: converted.slice(0, 2000),
+        username: message.member?.displayName || message.author.username,
+        avatarURL: message.author.displayAvatarURL(),
+        threadId,
+        allowedMentions: { parse: [] } // converting text must never trigger new pings
+    }).catch(() => null);
+    return Boolean(sent);
+}
+
 // --- Global Message Handler ---
 client.on(Events.MessageCreate, async message => {
-    if (message.author.bot) return;
+    if (message.author.bot || message.webhookId) return;
 
     // Verification captcha replies come in via DM (no guild).
     if (!message.guild) {
         const verifyCmd = client.commands.get('verify');
         if (verifyCmd?.handleVerifyDM) await verifyCmd.handleVerifyDM(message, client);
         return;
+    }
+
+    // 0. Word filter — runs first so a blocked message is removed immediately.
+    const filterCmd = client.commands.get('filter');
+    if (filterCmd?.checkMessage) {
+        const handled = await filterCmd.checkMessage(message, client);
+        if (handled) return;
+    }
+
+    // 0b. Auto-convert emoji shortcodes (e.g. :alarm: -> 🚨) and repost as the user.
+    if (message.content && /(?<!<):[a-z0-9_]+:(?!\d+>)/i.test(message.content)) {
+        const converted = convertEmojiCodes(message.content);
+        if (converted !== message.content) {
+            const perms = message.channel.permissionsFor(message.guild.members.me);
+            const canRepost = perms?.has(PermissionFlagsBits.ManageWebhooks) && perms?.has(PermissionFlagsBits.ManageMessages);
+            let reposted = false;
+            if (canRepost) {
+                reposted = await repostWithEmojis(message, converted);
+                if (reposted) await message.delete().catch(() => null);
+            }
+            if (!reposted) {
+                await message.reply({ content: converted.slice(0, 2000), allowedMentions: { parse: [] } }).catch(() => null);
+            }
+        }
     }
 
     // 1. Ticket Transcripts
