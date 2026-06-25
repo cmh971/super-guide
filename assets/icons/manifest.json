@@ -1,0 +1,242 @@
+[
+  {
+    "name": "ksrp_blue_disc",
+    "label": "Blue Disc",
+    "color": 2450411,
+    "file": "ksrp_blue_disc.svg"
+  },
+  {
+    "name": "ksrp_green_ring",
+    "label": "Green Ring",
+    "color": 366185,
+    "file": "ksrp_green_ring.svg"
+  },
+  {
+    "name": "ksrp_red_dot3",
+    "label": "Red Dot3",
+    "color": 14427686,
+    "file": "ksrp_red_dot3.svg"
+  },
+  {
+    "name": "ksrp_amber_square",
+    "label": "Amber Square",
+    "color": 14251782,
+    "file": "ksrp_amber_square.svg"
+  },
+  {
+    "name": "ksrp_violet_diamond",
+    "label": "Violet Diamond",
+    "color": 8141549,
+    "file": "ksrp_violet_diamond.svg"
+  },
+  {
+    "name": "ksrp_pink_triup",
+    "label": "Pink TriUp",
+    "color": 14362487,
+    "file": "ksrp_pink_triup.svg"
+  },
+  {
+    "name": "ksrp_cyan_tridown",
+    "label": "Cyan TriDown",
+    "color": 561586,
+    "file": "ksrp_cyan_tridown.svg"
+  },
+  {
+    "name": "ksrp_orange_hexagon",
+    "label": "Orange Hexagon",
+    "color": 15357964,
+    "file": "ksrp_orange_hexagon.svg"
+  },
+  {
+    "name": "ksrp_lime_pentagon",
+    "label": "Lime Pentagon",
+    "color": 1483594,
+    "file": "ksrp_lime_pentagon.svg"
+  },
+  {
+    "name": "ksrp_indigo_star5",
+    "label": "Indigo Star5",
+    "color": 5195493,
+    "file": "ksrp_indigo_star5.svg"
+  },
+  {
+    "name": "ksrp_teal_star6",
+    "label": "Teal Star6",
+    "color": 889992,
+    "file": "ksrp_teal_star6.svg"
+  },
+  {
+    "name": "ksrp_fuchsia_plus",
+    "label": "Fuchsia Plus",
+    "color": 12592851,
+    "file": "ksrp_fuchsia_plus.svg"
+  },
+  {
+    "name": "ksrp_blue_cross",
+    "label": "Blue Cross",
+    "color": 2450411,
+    "file": "ksrp_blue_cross.svg"
+  },
+  {
+    "name": "ksrp_green_heart",
+    "label": "Green Heart",
+    "color": 366185,
+    "file": "ksrp_green_heart.svg"
+  },
+  {
+    "name": "ksrp_red_bolt",
+    "label": "Red Bolt",
+    "color": 14427686,
+    "file": "ksrp_red_bolt.svg"
+  },
+  {
+    "name": "ksrp_amber_shield",
+    "label": "Amber Shield",
+    "color": 14251782,
+    "file": "ksrp_amber_shield.svg"
+  },
+  {
+    "name": "ksrp_violet_lock",
+    "label": "Violet Lock",
+    "color": 8141549,
+    "file": "ksrp_violet_lock.svg"
+  },
+  {
+    "name": "ksrp_pink_check",
+    "label": "Pink Check",
+    "color": 14362487,
+    "file": "ksrp_pink_check.svg"
+  },
+  {
+    "name": "ksrp_cyan_bars3",
+    "label": "Cyan Bars3",
+    "color": 561586,
+    "file": "ksrp_cyan_bars3.svg"
+  },
+  {
+    "name": "ksrp_orange_chart",
+    "label": "Orange Chart",
+    "color": 15357964,
+    "file": "ksrp_orange_chart.svg"
+  },
+  {
+    "name": "ksrp_lime_disc",
+    "label": "Lime Disc",
+    "color": 1483594,
+    "file": "ksrp_lime_disc.svg"
+  },
+  {
+    "name": "ksrp_indigo_ring",
+    "label": "Indigo Ring",
+    "color": 5195493,
+    "file": "ksrp_indigo_ring.svg"
+  },
+  {
+    "name": "ksrp_teal_dot3",
+    "label": "Teal Dot3",
+    "color": 889992,
+    "file": "ksrp_teal_dot3.svg"
+  },
+  {
+    "name": "ksrp_fuchsia_square",
+    "label": "Fuchsia Square",
+    "color": 12592851,
+    "file": "ksrp_fuchsia_square.svg"
+  },
+  {
+    "name": "ksrp_blue_diamond",
+    "label": "Blue Diamond",
+    "color": 2450411,
+    "file": "ksrp_blue_diamond.svg"
+  },
+  {
+    "name": "ksrp_green_triup",
+    "label": "Green TriUp",
+    "color": 366185,
+    "file": "ksrp_green_triup.svg"
+  },
+  {
+    "name": "ksrp_red_tridown",
+    "label": "Red TriDown",
+    "color": 14427686,
+    "file": "ksrp_red_tridown.svg"
+  },
+  {
+    "name": "ksrp_amber_hexagon",
+    "label": "Amber Hexagon",
+    "color": 14251782,
+    "file": "ksrp_amber_hexagon.svg"
+  },
+  {
+    "name": "ksrp_violet_pentagon",
+    "label": "Violet Pentagon",
+    "color": 8141549,
+    "file": "ksrp_violet_pentagon.svg"
+  },
+  {
+    "name": "ksrp_pink_star5",
+    "label": "Pink Star5",
+    "color": 14362487,
+    "file": "ksrp_pink_star5.svg"
+  },
+  {
+    "name": "ksrp_cyan_star6",
+    "label": "Cyan Star6",
+    "color": 561586,
+    "file": "ksrp_cyan_star6.svg"
+  },
+  {
+    "name": "ksrp_orange_plus",
+    "label": "Orange Plus",
+    "color": 15357964,
+    "file": "ksrp_orange_plus.svg"
+  },
+  {
+    "name": "ksrp_lime_cross",
+    "label": "Lime Cross",
+    "color": 1483594,
+    "file": "ksrp_lime_cross.svg"
+  },
+  {
+    "name": "ksrp_indigo_heart",
+    "label": "Indigo Heart",
+    "color": 5195493,
+    "file": "ksrp_indigo_heart.svg"
+  },
+  {
+    "name": "ksrp_teal_bolt",
+    "label": "Teal Bolt",
+    "color": 889992,
+    "file": "ksrp_teal_bolt.svg"
+  },
+  {
+    "name": "ksrp_fuchsia_shield",
+    "label": "Fuchsia Shield",
+    "color": 12592851,
+    "file": "ksrp_fuchsia_shield.svg"
+  },
+  {
+    "name": "ksrp_blue_lock",
+    "label": "Blue Lock",
+    "color": 2450411,
+    "file": "ksrp_blue_lock.svg"
+  },
+  {
+    "name": "ksrp_green_check",
+    "label": "Green Check",
+    "color": 366185,
+    "file": "ksrp_green_check.svg"
+  },
+  {
+    "name": "ksrp_red_bars3",
+    "label": "Red Bars3",
+    "color": 14427686,
+    "file": "ksrp_red_bars3.svg"
+  },
+  {
+    "name": "ksrp_amber_chart",
+    "label": "Amber Chart",
+    "color": 14251782,
+    "file": "ksrp_amber_chart.svg"
+  }
+]

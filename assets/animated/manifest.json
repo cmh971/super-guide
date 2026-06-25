@@ -1,0 +1,68 @@
+[
+  {
+    "name": "ksrp_anim_spinner",
+    "label": "Blue Spinner",
+    "color": 2450411,
+    "file": "ksrp_anim_spinner.gif"
+  },
+  {
+    "name": "ksrp_anim_pulse",
+    "label": "Green Pulse",
+    "color": 366185,
+    "file": "ksrp_anim_pulse.gif"
+  },
+  {
+    "name": "ksrp_anim_bounce",
+    "label": "Red Bounce",
+    "color": 14427686,
+    "file": "ksrp_anim_bounce.gif"
+  },
+  {
+    "name": "ksrp_anim_dots",
+    "label": "Amber Dots",
+    "color": 14251782,
+    "file": "ksrp_anim_dots.gif"
+  },
+  {
+    "name": "ksrp_anim_spin",
+    "label": "Violet Spin",
+    "color": 8141549,
+    "file": "ksrp_anim_spin.gif"
+  },
+  {
+    "name": "ksrp_anim_radar",
+    "label": "Cyan Radar",
+    "color": 561586,
+    "file": "ksrp_anim_radar.gif"
+  },
+  {
+    "name": "ksrp_anim_sparkle",
+    "label": "Pink Sparkle",
+    "color": 14362487,
+    "file": "ksrp_anim_sparkle.gif"
+  },
+  {
+    "name": "ksrp_anim_wave",
+    "label": "Orange Equalizer",
+    "color": 15357964,
+    "file": "ksrp_anim_wave.gif"
+  },
+  {
+    "name": "ksrp_anim_coin",
+    "label": "Indigo Coin",
+    "color": 5195493,
+    "file": "ksrp_anim_coin.gif"
+  },
+  {
+    "name": "ksrp_anim_progress",
+    "label": "Teal Progress",
+    "color": 889992,
+    "file": "ksrp_anim_progress.gif"
+  },
+  {
+    "name": "ksrp_anim_loading",
+    "label": "Fuchsia Loading",
+    "color": 12592851,
+    "file": "ksrp_anim_loading.gif"
+  }
+]

@@ -4,19 +4,26 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 // Discord allows a maximum of 100 GLOBAL slash commands per app, but we ship
-// more than that. These niche text/novelty commands are excluded from global
-// registration so we land at exactly 100. (They still load in the bot; they're
-// just not registered as global slash commands.)
+// far more than that. Instead of dropping the extras, these niche commands are
+// excluded from DIRECT global registration and re-exposed as SUBCOMMANDS of the
+// parent commands /text, /funbox and /random (see *.js + tools/subcommand-router.js).
+// They still load in the bot — they're just reached via their parent command.
 const EXCLUDE = new Set([
+	// → /text  (text styling & transforms)
 	'spaceout', 'bubbletext', 'smallcaps', 'zalgo', 'flip', 'mirrortext',
 	'reverseeach', 'redact', 'shuffleletters', 'emojiletters', 'numemoji',
 	'braille', 'nato', 'asciicode', 'fromascii', 'stutter', 'spongebob',
-	'owoify', 'piglatin', 'vowelcount', 'charcount', 'syllables', 'acronym',
-	'slugify', 'textstats', 'charinfo', 'rot13', 'uppercase', 'lowercase',
-	'titlecase', 'clap', 'catfact', 'dogfact', 'numfact', 'pickupline',
-	'riddle', 'proverb', 'cookie', 'neverhaveiever', 'hype', 'insult', 'lorem',
-	'namegen', 'gamertag', 'bandname', 'lovecalc', 'conch', 'rpsls',
-	'randomemoji', 'randomhex', 'scrabble', 'wheel', 'chance', 'fromroman', 'd6'
+	'owoify', 'piglatin', 'slugify', 'rot13', 'uppercase', 'lowercase',
+	'titlecase', 'clap',
+	// → /funbox  (novelty + text analysis)
+	'catfact', 'dogfact', 'numfact', 'pickupline', 'riddle', 'proverb',
+	'cookie', 'neverhaveiever', 'hype', 'insult', 'lorem', 'namegen',
+	'gamertag', 'bandname', 'lovecalc', 'conch', 'rpsls', 'yesno',
+	'vowelcount', 'charcount', 'syllables', 'acronym', 'textstats',
+	'charinfo', 'dadjoke',
+	// → /random  (random pickers, dice, generators)
+	'randomemoji', 'randomhex', 'scrabble', 'wheel', 'chance', 'fromroman',
+	'd6', 'flipcoins', 'fortune',
 ]);
 
 const commands = [];

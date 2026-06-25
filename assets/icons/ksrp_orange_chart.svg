@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Orange Chart — Kansas State Roleplay icon. Rasterised by tools/svg2png.js -->
+<svg width="128" height="128" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="128" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fb923c"/>
+      <stop offset="1" stop-color="#ea580c"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="120" height="120" rx="28" fill="url(#bg)"/>
+  <rect x="42.88" y="69.28" width="12.32" height="21.12" fill="#ffffff"/><rect x="57.84" y="55.2" width="12.32" height="35.2" fill="#ffffff"/><rect x="72.8" y="42.88" width="12.32" height="47.52" fill="#ffffff"/>
+</svg>
