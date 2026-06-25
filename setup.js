@@ -16,7 +16,26 @@
 //   • Where the bot already has subsystems (tickets, presence) we mirror the
 //     settings into their existing models so nothing is duplicated.
 //
-// customId scheme:  setup:<section>:<action>[:<arg>]
+// customId scheme:  setup:<section>:<action>[:<arg>]   (admin panel)
+//                   setpub:<kind>:<arg>                (public member components)
+//
+// Systems implemented (each = config panel + persistence + live runtime):
+//   Engagement : welcome, goodbye, autorole, reaction roles, self-role buttons,
+//                dropdown roles, auto responders, auto react, sticky messages,
+//                birthdays, embed builder, counting game, boost messages,
+//                auto threads, poll maker.
+//   Moderation : word filter, link filter, anti-spam, anti-raid, join gate,
+//                verification, logging (member/message/mod/voice + ignore list),
+//                server lockdown, mod tools, sticky roles, media-only channels,
+//                warnings + auto-actions, nickname filter.
+//   Systems    : tickets, staff apps, suggestions, starboard, leveling (text +
+//                voice XP + role rewards), economy (+ shop + member panel),
+//                auto publish, server stats, presence, scheduled messages,
+//                temp voice, ticket panel, backup/restore, announce ping,
+//                branding, invite tracker, mass role, diagnostics, help.
+//
+// Runtime is registered once via init(client); public components route through
+// handlePublic(); the admin panel routes through handleInteraction().
 // ============================================================================
 
 const {
@@ -62,6 +81,12 @@ const setupSchema = new mongoose.Schema({
         messageLogId: { type: String, default: null },   // edits / deletes
         modLogId: { type: String, default: null },   // bans / kicks / timeouts
         voiceLogId: { type: String, default: null },   // voice join/leave/move
+        ignoredChannelIds: { type: [String], default: [] }, // channels excluded from message logs
+    },
+    serverlock: {
+        active: { type: Boolean, default: false },
+        reason: { type: String, default: 'Maintenance' },
+        lockedChannels: { type: [String], default: [] },
     },
     verification: {
         enabled: { type: Boolean, default: false },
@@ -141,6 +166,7 @@ const setupSchema = new mongoose.Schema({
         announceChannelId: { type: String, default: null }, // null = reply in-channel
         announceMessage: { type: String, default: '🎉 {user.mention} reached **level {level}**!' },
         xpPerMessage: { type: Number, default: 15 },
+        voiceXpPerMin: { type: Number, default: 0 }, // XP per minute spent in voice (0 = off)
         cooldownSeconds: { type: Number, default: 60 },
         multiplier: { type: Number, default: 1 },
         stack: { type: Boolean, default: false }, // keep lower reward roles when leveling up
@@ -269,6 +295,48 @@ const setupSchema = new mongoose.Schema({
             }], default: [],
         },
     },
+    autothread: {
+        enabled: { type: Boolean, default: false },
+        rules: { type: [{ channelId: String, nameTemplate: String }], default: [] },
+    },
+    mediaonly: {
+        enabled: { type: Boolean, default: false },
+        channelIds: { type: [String], default: [] },
+        allowLinks: { type: Boolean, default: true },
+    },
+    warnings: {
+        enabled: { type: Boolean, default: false },
+        logChannelId: { type: String, default: null },
+        autoActions: { type: [{ count: Number, action: String, durationMinutes: Number }], default: [] },
+        records: { type: [{ userId: String, reason: String, modId: String, time: Number }], default: [] },
+    },
+    announceping: {
+        enabled: { type: Boolean, default: false },
+        mappings: { type: [{ channelId: String, roleId: String }], default: [] },
+    },
+    branding: {
+        displayName: { type: String, default: null },
+        accentColor: { type: String, default: '#3b82f6' },
+        modLogChannelId: { type: String, default: null },
+        supportInvite: { type: String, default: null },
+    },
+    shop: {
+        enabled: { type: Boolean, default: false },
+        items: { type: [{ name: String, price: Number, roleId: String, description: String }], default: [] },
+    },
+    autopurge: {
+        tasks: { type: [{ channelId: String, everyHours: Number, lastRun: Number, keepPinned: Boolean }], default: [] },
+    },
+    nickfilter: {
+        enabled: { type: Boolean, default: false },
+        words: { type: [String], default: [] },
+        action: { type: String, default: 'rename' }, // rename | kick
+    },
+    invites: {
+        enabled: { type: Boolean, default: false },
+        channelId: { type: String, default: null },
+        counts: { type: [{ userId: String, count: Number }], default: [] },
+    },
 }, { minimize: false });
 
 const SetupConfig = mongoose.models.SetupConfig || mongoose.model('SetupConfig', setupSchema);
@@ -339,6 +407,7 @@ const SECTIONS = [
     { key: 'joingate', label: 'Join Gate', emoji: '⛔', desc: 'Minimum account age', group: 'moderation' },
     { key: 'verification', label: 'Verification', emoji: '✅', desc: 'Gate new members', group: 'moderation' },
     { key: 'logging', label: 'Server Logging', emoji: '📋', desc: 'Audit events', group: 'moderation' },
+    { key: 'serverlock', label: 'Server Lockdown', emoji: '🔒', desc: 'Lock/unlock all channels', group: 'moderation' },
     { key: 'modtools', label: 'Mod Tools', emoji: '🔨', desc: 'Mute role, dehoist, mentions', group: 'moderation' },
     // — Systems —
     { key: 'tickets', label: 'Ticket System', emoji: '🎫', desc: 'Support tickets', group: 'systems' },
@@ -350,6 +419,30 @@ const SECTIONS = [
     { key: 'autopublish', label: 'Auto Publish', emoji: '📣', desc: 'Crosspost announcements', group: 'systems' },
     { key: 'stats', label: 'Server Stats', emoji: '📊', desc: 'Live member counters', group: 'systems' },
     { key: 'presence', label: 'Bot Presence', emoji: '🤖', desc: "The bot's status", group: 'systems' },
+    // — Added systems —
+    { key: 'counting', label: 'Counting Game', emoji: '🔢', desc: 'Channel counting game', group: 'engagement' },
+    { key: 'boost', label: 'Boost Messages', emoji: '💜', desc: 'Thank server boosters', group: 'engagement' },
+    { key: 'dropdownroles', label: 'Dropdown Roles', emoji: '⬇️', desc: 'Self-assign via a menu', group: 'engagement' },
+    { key: 'stickyroles', label: 'Sticky Roles', emoji: '🧷', desc: 'Restore roles on rejoin', group: 'moderation' },
+    { key: 'scheduled', label: 'Scheduled Messages', emoji: '⏰', desc: 'Recurring announcements', group: 'systems' },
+    { key: 'tempvoice', label: 'Temp Voice', emoji: '🔊', desc: 'Join-to-create channels', group: 'systems' },
+    { key: 'ticketpanel', label: 'Ticket Panel', emoji: '📮', desc: 'Post a ticket opener', group: 'systems' },
+    { key: 'backup', label: 'Backup / Restore', emoji: '💾', desc: 'Export & import config', group: 'systems' },
+    // — Final batch —
+    { key: 'autothread', label: 'Auto Threads', emoji: '🧵', desc: 'Thread every message', group: 'engagement' },
+    { key: 'pollmaker', label: 'Poll Maker', emoji: '📊', desc: 'Post a reaction poll', group: 'engagement' },
+    { key: 'mediaonly', label: 'Media-Only', emoji: '🖼️', desc: 'Images-only channels', group: 'moderation' },
+    { key: 'warnings', label: 'Warnings', emoji: '⚠️', desc: 'Infractions & auto-actions', group: 'moderation' },
+    { key: 'announceping', label: 'Announce Ping', emoji: '🔔', desc: 'Ping a role on post', group: 'systems' },
+    { key: 'branding', label: 'Branding', emoji: '🎨', desc: 'Name, colour & support', group: 'systems' },
+    // — Extras —
+    { key: 'shop', label: 'Economy Shop', emoji: '🛒', desc: 'Buy roles with currency', group: 'systems' },
+    { key: 'autopurge', label: 'Auto Purge', emoji: '🧽', desc: 'Periodic channel cleanup', group: 'moderation' },
+    { key: 'nickfilter', label: 'Nickname Filter', emoji: '🪪', desc: 'Block bad nicknames', group: 'moderation' },
+    { key: 'invites', label: 'Invite Tracker', emoji: '📨', desc: 'Track who invited whom', group: 'systems' },
+    { key: 'massrole', label: 'Mass Role', emoji: '👥', desc: 'Add/remove a role for all', group: 'systems' },
+    { key: 'diagnostics', label: 'Diagnostics', emoji: '🩺', desc: 'Check permissions & config', group: 'systems' },
+    { key: 'help', label: 'Help / About', emoji: 'ℹ️', desc: 'Guide & support links', group: 'systems' },
 ];
 
 const GROUPS = [
@@ -374,9 +467,10 @@ function isActive(cfg, key) {
     if (key === 'modtools') return Boolean(v.muteRoleId || v.dehoist || v.maxMentions);
     return false;
 }
+const TOOL_KEYS = new Set(['embedbuilder', 'backup', 'ticketpanel', 'pollmaker', 'branding', 'help', 'diagnostics', 'massrole']);
 function statusDot(cfg, key) {
     if (key === 'presence') return '🤖';
-    if (key === 'embedbuilder') return '🛠️';
+    if (TOOL_KEYS.has(key)) return '🛠️';
     return isActive(cfg, key) ? '🟢' : '⚪';
 }
 
@@ -503,6 +597,7 @@ PANELS.logging = cfg => {
             { name: 'Message log (edits/deletes)', value: chanMention(l.messageLogId), inline: false },
             { name: 'Mod log (bans/kicks/timeouts)', value: chanMention(l.modLogId), inline: false },
             { name: 'Voice log (join/leave/move)', value: chanMention(l.voiceLogId), inline: false },
+            { name: 'Ignored channels', value: l.ignoredChannelIds.length ? l.ignoredChannelIds.map(chanMention).join(' ') : '*none*', inline: false },
         );
     return {
         embeds: [embed], components: [
@@ -513,7 +608,30 @@ PANELS.logging = cfg => {
                 { label: 'Voice log', value: 'voiceLogId', emoji: '🔊' },
             )),
             new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId('setup:logging:channel').setPlaceholder('📢 …then choose its channel').addChannelTypes(ChannelType.GuildText)),
+            new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId('setup:logging:ignore').setPlaceholder('🙈 Ignored channels (no message logs)').setMinValues(0).setMaxValues(15).addChannelTypes(ChannelType.GuildText)),
             new ActionRowBuilder().addComponents(toggleButton('logging', l.enabled)),
+            backRow(),
+        ],
+    };
+};
+
+// ---- Server lockdown ------------------------------------------------------
+PANELS.serverlock = cfg => {
+    const s = cfg.serverlock;
+    const embed = new EmbedBuilder().setColor(s.active ? 0xef4444 : ACCENT).setTitle('🔒 Server Lockdown')
+        .setDescription('Instantly deny @everyone permission to send messages in every text channel, and restore it later. Useful during raids or emergencies.')
+        .addFields(
+            { name: 'State', value: s.active ? '🔴 **LOCKED**' : '🟢 Unlocked', inline: true },
+            { name: 'Locked channels', value: `${s.lockedChannels.length}`, inline: true },
+            { name: 'Reason', value: s.reason || '*none*', inline: true },
+        );
+    return {
+        embeds: [embed], components: [
+            new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('setup:serverlock:lock').setLabel('Lock Server').setEmoji('🔒').setStyle(ButtonStyle.Danger).setDisabled(s.active),
+                new ButtonBuilder().setCustomId('setup:serverlock:unlock').setLabel('Unlock Server').setEmoji('🔓').setStyle(ButtonStyle.Success).setDisabled(!s.active),
+                new ButtonBuilder().setCustomId('setup:serverlock:reason').setLabel('Set Reason').setEmoji('✏️').setStyle(ButtonStyle.Secondary),
+            ),
             backRow(),
         ],
     };
@@ -636,6 +754,7 @@ PANELS.reactionRoles = cfg => {
     const rows = [
         new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId('setup:reactionRoles:add').setLabel('Add Mapping').setEmoji('➕').setStyle(ButtonStyle.Success),
+            new ButtonBuilder().setCustomId('setup:reactionRoles:clear').setLabel('Clear All').setEmoji('🧹').setStyle(ButtonStyle.Danger).setDisabled(!list.length),
         ),
     ];
     if (list.length) {
@@ -655,7 +774,10 @@ PANELS.autoresponders = cfg => {
     const embed = new EmbedBuilder().setColor(ACCENT).setTitle('💬 Auto Responders')
         .setDescription('When a message matches a trigger, the bot replies automatically.')
         .addFields({ name: 'Configured', value: lines.slice(0, 1024) });
-    const rows = [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('setup:autoresponders:add').setLabel('Add Responder').setEmoji('➕').setStyle(ButtonStyle.Success))];
+    const rows = [new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('setup:autoresponders:add').setLabel('Add Responder').setEmoji('➕').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId('setup:autoresponders:clear').setLabel('Clear All').setEmoji('🧹').setStyle(ButtonStyle.Danger).setDisabled(!list.length),
+    )];
     if (list.length) {
         rows.push(new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('setup:autoresponders:remove').setPlaceholder('🗑️ Remove a responder…')
             .addOptions(list.map((r, i) => ({ label: `${r.trigger}`.slice(0, 90), value: String(i) })))));
@@ -807,6 +929,7 @@ PANELS.leveling = cfg => {
         .addFields(
             { name: 'Status', value: onoff(l.enabled), inline: true },
             { name: 'XP / message', value: `${l.xpPerMessage} (×${l.multiplier})`, inline: true },
+            { name: 'Voice XP / min', value: l.voiceXpPerMin ? `${l.voiceXpPerMin}` : 'Off', inline: true },
             { name: 'Cooldown', value: `${l.cooldownSeconds}s`, inline: true },
             { name: 'Announce', value: l.announceChannelId ? chanMention(l.announceChannelId) : 'In the chat channel', inline: true },
             { name: 'Reward stacking', value: l.stack ? 'Keep old roles' : 'Replace', inline: true },
@@ -859,6 +982,7 @@ PANELS.economy = cfg => {
             ),
             new ActionRowBuilder().addComponents(
                 new ButtonBuilder().setCustomId('setup:economy:grant').setLabel('Give / Take').setEmoji('💸').setStyle(ButtonStyle.Success),
+                new ButtonBuilder().setCustomId('setup:economy:panel').setLabel('Post Member Panel').setEmoji('📨').setStyle(ButtonStyle.Primary),
                 new ButtonBuilder().setCustomId('setup:economy:reset').setLabel('Reset Economy').setEmoji('♻️').setStyle(ButtonStyle.Danger),
             ),
             backRow(),
@@ -1122,9 +1246,492 @@ PANELS.modtools = cfg => {
     };
 };
 
+// ---- Counting game --------------------------------------------------------
+PANELS.counting = cfg => {
+    const c = cfg.counting;
+    const embed = new EmbedBuilder().setColor(ACCENT).setTitle('🔢 Counting Game')
+        .setDescription('Members count up one number at a time in the chosen channel. No double-counting; wrong numbers can reset the streak.')
+        .addFields(
+            { name: 'Status', value: onoff(c.enabled), inline: true },
+            { name: 'Channel', value: chanMention(c.channelId), inline: true },
+            { name: 'Current', value: `${c.current}`, inline: true },
+            { name: 'High score', value: `${c.highScore}`, inline: true },
+            { name: 'On wrong number', value: c.resetOnFail ? 'Reset to 0' : 'Just delete', inline: true },
+        );
+    return {
+        embeds: [embed], components: [
+            new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId('setup:counting:channel').setPlaceholder('🔢 Counting channel').addChannelTypes(ChannelType.GuildText)),
+            new ActionRowBuilder().addComponents(
+                toggleButton('counting', c.enabled),
+                new ButtonBuilder().setCustomId('setup:counting:reset').setLabel('Reset Count').setEmoji('♻️').setStyle(ButtonStyle.Danger),
+                new ButtonBuilder().setCustomId('setup:counting:fail').setLabel(c.resetOnFail ? 'Don\'t Reset' : 'Reset on Fail').setEmoji('⚙️').setStyle(ButtonStyle.Secondary),
+            ),
+            backRow(),
+        ],
+    };
+};
+
+// ---- Boost messages -------------------------------------------------------
+PANELS.boost = cfg => {
+    const b = cfg.boost;
+    const embed = new EmbedBuilder().setColor(0xf47fff).setTitle('💜 Boost Messages')
+        .setDescription('Celebrate members who boost the server. Placeholders: `{user.mention}`, `{server}`.')
+        .addFields(
+            { name: 'Status', value: onoff(b.enabled), inline: true },
+            { name: 'Channel', value: chanMention(b.channelId), inline: true },
+            { name: 'Message', value: '```' + (b.message || ' ').slice(0, 300) + '```' },
+        );
+    return {
+        embeds: [embed], components: [
+            new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId('setup:boost:channel').setPlaceholder('📢 Boost announcement channel').addChannelTypes(ChannelType.GuildText)),
+            new ActionRowBuilder().addComponents(
+                toggleButton('boost', b.enabled),
+                new ButtonBuilder().setCustomId('setup:boost:msg').setLabel('Edit Message').setEmoji('✏️').setStyle(ButtonStyle.Primary),
+            ),
+            backRow(),
+        ],
+    };
+};
+
+// ---- Dropdown role menus --------------------------------------------------
+PANELS.dropdownroles = cfg => {
+    const menus = cfg.dropdownroles.menus || [];
+    const lines = menus.length
+        ? menus.map((m, i) => `**${i + 1}.** ${m.title} — ${m.roles.length} role(s) [${m.messageId ? 'posted' : 'draft'}]`).join('\n')
+        : '*No dropdown menus yet.*';
+    const embed = new EmbedBuilder().setColor(ACCENT).setTitle('⬇️ Dropdown Roles')
+        .setDescription('Self-assign roles from a single select-menu (good for many roles at once).')
+        .addFields({ name: 'Menus', value: lines.slice(0, 1024) });
+    const rows = [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('setup:dropdownroles:new').setLabel('New Menu').setEmoji('➕').setStyle(ButtonStyle.Success))];
+    if (menus.length) {
+        rows.push(new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('setup:dropdownroles:pick').setPlaceholder('🛠️ Manage a menu…')
+            .addOptions(menus.map((m, i) => ({ label: `#${i + 1} · ${m.title}`.slice(0, 90), value: String(i), description: `${m.roles.length} role(s)` })))));
+    }
+    rows.push(backRow());
+    return { embeds: [embed], components: rows };
+};
+
+PANELS._dropdownMenu = (cfg, idx) => {
+    const m = cfg.dropdownroles.menus[idx];
+    if (!m) return PANELS.dropdownroles(cfg);
+    const roleLines = m.roles.length ? m.roles.map(r => `${r.emoji || '•'} <@&${r.roleId}> — \`${r.label}\``).join('\n') : '*no roles yet*';
+    const embed = new EmbedBuilder().setColor(ACCENT).setTitle(`⬇️ Menu: ${m.title}`)
+        .setDescription(`Add up to 25 roles, set how many a member may pick, then post it.`)
+        .addFields(
+            { name: 'Roles', value: roleLines.slice(0, 1024) },
+            { name: 'Pick range', value: `${m.min}–${m.max}`, inline: true },
+            { name: 'Posted', value: m.messageId ? `In <#${m.channelId}>` : 'Not yet', inline: true },
+        );
+    return {
+        embeds: [embed], components: [
+            new ActionRowBuilder().addComponents(new RoleSelectMenuBuilder().setCustomId(`setup:dropdownroles:addrole:${idx}`).setPlaceholder('➕ Add a role').setMaxValues(1)),
+            new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId(`setup:dropdownroles:post:${idx}`).setPlaceholder('📨 Post menu to channel').addChannelTypes(ChannelType.GuildText)),
+            new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId(`setup:dropdownroles:range:${idx}`).setLabel('Pick Range').setEmoji('🔢').setStyle(ButtonStyle.Secondary),
+                new ButtonBuilder().setCustomId(`setup:dropdownroles:clearroles:${idx}`).setLabel('Clear Roles').setEmoji('🧹').setStyle(ButtonStyle.Danger),
+                new ButtonBuilder().setCustomId(`setup:dropdownroles:delete:${idx}`).setLabel('Delete').setEmoji('🗑️').setStyle(ButtonStyle.Danger),
+            ),
+            new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('setup:dropdownroles:back').setLabel('Back to Menus').setEmoji('↩️').setStyle(ButtonStyle.Secondary)),
+        ],
+    };
+};
+
+// ---- Sticky roles ---------------------------------------------------------
+PANELS.stickyroles = cfg => {
+    const s = cfg.stickyroles;
+    const embed = new EmbedBuilder().setColor(ACCENT).setTitle('🧷 Sticky Roles')
+        .setDescription("Remembers each member's roles when they leave and restores them automatically if they rejoin.")
+        .addFields(
+            { name: 'Status', value: onoff(s.enabled), inline: true },
+            { name: 'Stored members', value: `${s.store.length}`, inline: true },
+        );
+    return {
+        embeds: [embed], components: [
+            new ActionRowBuilder().addComponents(
+                toggleButton('stickyroles', s.enabled),
+                new ButtonBuilder().setCustomId('setup:stickyroles:clear').setLabel('Clear Storage').setEmoji('🧹').setStyle(ButtonStyle.Danger),
+            ),
+            backRow(),
+        ],
+    };
+};
+
+// ---- Scheduled messages ---------------------------------------------------
+PANELS.scheduled = cfg => {
+    const list = cfg.scheduled.messages || [];
+    const lines = list.length
+        ? list.map((m, i) => `**${i + 1}.** <#${m.channelId}> every ${m.intervalMinutes}m\n> ${m.content.slice(0, 60)}`).join('\n')
+        : '*No scheduled messages.*';
+    const embed = new EmbedBuilder().setColor(ACCENT).setTitle('⏰ Scheduled Messages')
+        .setDescription('Post a recurring message to a channel on a fixed interval (e.g. rules reminders).')
+        .addFields({ name: 'Active', value: lines.slice(0, 1024) });
+    const rows = [new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('setup:scheduled:add').setLabel('Add Schedule').setEmoji('➕').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId('setup:scheduled:sendall').setLabel('Send All Now').setEmoji('📨').setStyle(ButtonStyle.Primary).setDisabled(!list.length),
+    )];
+    if (list.length) {
+        rows.push(new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('setup:scheduled:remove').setPlaceholder('🗑️ Remove a schedule…')
+            .addOptions(list.map((m, i) => ({ label: `#${i + 1} · every ${m.intervalMinutes}m`, value: String(i), description: m.content.slice(0, 90) })))));
+    }
+    rows.push(backRow());
+    return { embeds: [embed], components: rows };
+};
+
+// ---- Temp voice -----------------------------------------------------------
+PANELS.tempvoice = cfg => {
+    const t = cfg.tempvoice;
+    const embed = new EmbedBuilder().setColor(ACCENT).setTitle('🔊 Temp Voice Channels')
+        .setDescription('When a member joins the **hub** voice channel, the bot creates a personal voice channel for them and moves them in. It is deleted when empty. Template placeholder: `{user}`.')
+        .addFields(
+            { name: 'Status', value: onoff(t.enabled), inline: true },
+            { name: 'Hub channel', value: chanMention(t.hubChannelId), inline: true },
+            { name: 'Category', value: chanMention(t.categoryId), inline: true },
+            { name: 'Name template', value: `\`${t.nameTemplate}\``, inline: true },
+            { name: 'Live channels', value: `${t.active.length}`, inline: true },
+        );
+    return {
+        embeds: [embed], components: [
+            new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId('setup:tempvoice:hub').setPlaceholder('🔊 Hub (join-to-create) channel').addChannelTypes(ChannelType.GuildVoice)),
+            new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId('setup:tempvoice:category').setPlaceholder('📁 Category for new channels').addChannelTypes(ChannelType.GuildCategory)),
+            new ActionRowBuilder().addComponents(
+                toggleButton('tempvoice', t.enabled),
+                new ButtonBuilder().setCustomId('setup:tempvoice:template').setLabel('Name Template').setEmoji('✏️').setStyle(ButtonStyle.Primary),
+            ),
+            backRow(),
+        ],
+    };
+};
+
+// ---- Ticket panel poster --------------------------------------------------
+PANELS.ticketpanel = cfg => {
+    const embed = new EmbedBuilder().setColor(ACCENT).setTitle('📮 Ticket Panel')
+        .setDescription('Post a ready-to-use ticket opener (a category select menu) to a channel. It uses your Ticket System settings and the existing `ticket_select` handler.');
+    return {
+        embeds: [embed], components: [
+            new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId('setup:ticketpanel:post').setPlaceholder('📨 Post the ticket panel to…').addChannelTypes(ChannelType.GuildText)),
+            backRow(),
+        ],
+    };
+};
+
+// ---- Backup / Restore -----------------------------------------------------
+PANELS.backup = cfg => {
+    const embed = new EmbedBuilder().setColor(ACCENT).setTitle('💾 Backup / Restore')
+        .setDescription('Export this server\'s entire setup configuration as a JSON file, or paste a previous export to restore it. User data (XP, balances, stored roles) is excluded from exports.');
+    return {
+        embeds: [embed], components: [
+            new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('setup:backup:export').setLabel('Export JSON').setEmoji('📤').setStyle(ButtonStyle.Primary),
+                new ButtonBuilder().setCustomId('setup:backup:import').setLabel('Import JSON').setEmoji('📥').setStyle(ButtonStyle.Success),
+            ),
+            backRow(),
+        ],
+    };
+};
+
+// ---- Auto threads ---------------------------------------------------------
+PANELS.autothread = cfg => {
+    const a = cfg.autothread;
+    const lines = a.rules.length ? a.rules.map((r, i) => `**${i + 1}.** <#${r.channelId}> — \`${r.nameTemplate || '{user}'}\``).join('\n') : '*No rules. Add a channel to thread every message posted there.*';
+    const embed = new EmbedBuilder().setColor(ACCENT).setTitle('🧵 Auto Threads')
+        .setDescription('Creates a thread on every message in chosen channels (great for media, help or showcase channels). Template: `{user}`.')
+        .addFields({ name: 'Status', value: onoff(a.enabled), inline: true }, { name: 'Rules', value: lines.slice(0, 1024) });
+    const rows = [new ActionRowBuilder().addComponents(
+        toggleButton('autothread', a.enabled),
+        new ButtonBuilder().setCustomId('setup:autothread:add').setLabel('Add Channel').setEmoji('➕').setStyle(ButtonStyle.Success),
+    )];
+    if (a.rules.length) {
+        rows.push(new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('setup:autothread:remove').setPlaceholder('🗑️ Remove a rule…')
+            .addOptions(a.rules.map((r, i) => ({ label: `#${i + 1}`, value: String(i), description: r.nameTemplate || '{user}' })))));
+    }
+    rows.push(backRow());
+    return { embeds: [embed], components: rows };
+};
+
+// ---- Poll maker -----------------------------------------------------------
+PANELS.pollmaker = cfg => {
+    const embed = new EmbedBuilder().setColor(ACCENT).setTitle('📊 Poll Maker')
+        .setDescription('Build a quick reaction poll (up to 10 options) and post it to any channel. Members vote with number reactions.');
+    return {
+        embeds: [embed], components: [
+            new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId('setup:pollmaker:channel').setPlaceholder('📢 Post the poll to…').addChannelTypes(ChannelType.GuildText)),
+            new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('setup:pollmaker:make').setLabel('Compose Poll').setEmoji('📝').setStyle(ButtonStyle.Primary)),
+            backRow(),
+        ],
+    };
+};
+
+// ---- Media-only -----------------------------------------------------------
+PANELS.mediaonly = cfg => {
+    const m = cfg.mediaonly;
+    const embed = new EmbedBuilder().setColor(ACCENT).setTitle('🖼️ Media-Only Channels')
+        .setDescription('Messages without an image/video/attachment are removed in these channels.')
+        .addFields(
+            { name: 'Status', value: onoff(m.enabled), inline: true },
+            { name: 'Allow links', value: m.allowLinks ? '🟢 Yes (links count as media)' : '⚪ No', inline: true },
+            { name: 'Channels', value: m.channelIds.length ? m.channelIds.map(chanMention).join(' ') : '*none*' },
+        );
+    return {
+        embeds: [embed], components: [
+            new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId('setup:mediaonly:channels').setPlaceholder('🖼️ Media-only channels').setMinValues(0).setMaxValues(10).addChannelTypes(ChannelType.GuildText)),
+            new ActionRowBuilder().addComponents(
+                toggleButton('mediaonly', m.enabled),
+                new ButtonBuilder().setCustomId('setup:mediaonly:links').setLabel(m.allowLinks ? 'Disallow Links' : 'Allow Links').setEmoji('🔗').setStyle(ButtonStyle.Secondary),
+            ),
+            backRow(),
+        ],
+    };
+};
+
+// ---- Warnings -------------------------------------------------------------
+PANELS.warnings = cfg => {
+    const w = cfg.warnings;
+    const actions = w.autoActions.length ? w.autoActions.sort((a, b) => a.count - b.count).map(a => `${a.count} → \`${a.action}\`${a.action === 'timeout' ? ` ${a.durationMinutes}m` : ''}`).join('\n') : '*none*';
+    const counts = {};
+    for (const r of w.records) counts[r.userId] = (counts[r.userId] || 0) + 1;
+    const top = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([id, n]) => `<@${id}> — ${n}`).join('\n') || '*no warnings yet*';
+    const embed = new EmbedBuilder().setColor(0xf59e0b).setTitle('⚠️ Warnings')
+        .setDescription('Track member infractions and auto-punish at thresholds.')
+        .addFields(
+            { name: 'Status', value: onoff(w.enabled), inline: true },
+            { name: 'Log channel', value: chanMention(w.logChannelId), inline: true },
+            { name: 'Total records', value: `${w.records.length}`, inline: true },
+            { name: 'Auto-actions', value: actions, inline: false },
+            { name: 'Most warned', value: top, inline: false },
+        );
+    return {
+        embeds: [embed], components: [
+            new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId('setup:warnings:log').setPlaceholder('📜 Warning log channel').setMinValues(0).addChannelTypes(ChannelType.GuildText)),
+            new ActionRowBuilder().addComponents(
+                toggleButton('warnings', w.enabled),
+                new ButtonBuilder().setCustomId('setup:warnings:warn').setLabel('Warn a User').setEmoji('⚠️').setStyle(ButtonStyle.Primary),
+                new ButtonBuilder().setCustomId('setup:warnings:view').setLabel('View User').setEmoji('🔍').setStyle(ButtonStyle.Secondary),
+                new ButtonBuilder().setCustomId('setup:warnings:autoaction').setLabel('Add Auto-Action').setEmoji('⚙️').setStyle(ButtonStyle.Success),
+            ),
+            new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('setup:warnings:clearactions').setLabel('Clear Auto-Actions').setEmoji('🧹').setStyle(ButtonStyle.Danger),
+                new ButtonBuilder().setCustomId('setup:warnings:clearrecords').setLabel('Clear All Records').setEmoji('♻️').setStyle(ButtonStyle.Danger),
+            ),
+            backRow(),
+        ],
+    };
+};
+
+// ---- Announce ping --------------------------------------------------------
+PANELS.announceping = cfg => {
+    const a = cfg.announceping;
+    const lines = a.mappings.length ? a.mappings.map((m, i) => `**${i + 1}.** <#${m.channelId}> → <@&${m.roleId}>`).join('\n') : '*No mappings.*';
+    const embed = new EmbedBuilder().setColor(ACCENT).setTitle('🔔 Announce Ping')
+        .setDescription('Automatically ping a role whenever a message is posted in a mapped channel.')
+        .addFields({ name: 'Status', value: onoff(a.enabled), inline: true }, { name: 'Mappings', value: lines.slice(0, 1024) });
+    const rows = [new ActionRowBuilder().addComponents(
+        toggleButton('announceping', a.enabled),
+        new ButtonBuilder().setCustomId('setup:announceping:add').setLabel('Add Mapping').setEmoji('➕').setStyle(ButtonStyle.Success),
+    )];
+    if (a.mappings.length) {
+        rows.push(new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('setup:announceping:remove').setPlaceholder('🗑️ Remove a mapping…')
+            .addOptions(a.mappings.map((m, i) => ({ label: `#${i + 1}`, value: String(i) })))));
+    }
+    rows.push(backRow());
+    return { embeds: [embed], components: rows };
+};
+
+// ---- Branding -------------------------------------------------------------
+PANELS.branding = cfg => {
+    const b = cfg.branding;
+    const embed = new EmbedBuilder().setColor(parseColor(b.accentColor)).setTitle('🎨 Branding')
+        .setDescription('Cosmetic identity for the panel and posted embeds.')
+        .addFields(
+            { name: 'Display name', value: b.displayName || `*${BRAND}* (default)`, inline: true },
+            { name: 'Accent colour', value: b.accentColor, inline: true },
+            { name: 'Default mod-log', value: chanMention(b.modLogChannelId), inline: true },
+            { name: 'Support invite', value: b.supportInvite || '*none*', inline: true },
+        );
+    return {
+        embeds: [embed], components: [
+            new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId('setup:branding:modlog').setPlaceholder('📜 Default mod-log channel').setMinValues(0).addChannelTypes(ChannelType.GuildText)),
+            new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('setup:branding:edit').setLabel('Edit Branding').setEmoji('✏️').setStyle(ButtonStyle.Primary),
+            ),
+            backRow(),
+        ],
+    };
+};
+
+// ---- Economy shop ---------------------------------------------------------
+PANELS.shop = cfg => {
+    const s = cfg.shop;
+    const lines = s.items.length
+        ? s.items.map((it, i) => `**${i + 1}.** ${it.name} — ${cfg.economy.symbol} ${it.price} → <@&${it.roleId}>`).join('\n')
+        : '*No items. Add a role players can buy with currency.*';
+    const embed = new EmbedBuilder().setColor(0xf59e0b).setTitle('🛒 Economy Shop')
+        .setDescription('Sell roles for your server currency. Post a shop panel members can buy from.')
+        .addFields({ name: 'Status', value: onoff(s.enabled), inline: true }, { name: 'Currency', value: `${cfg.economy.symbol} ${cfg.economy.currencyName}`, inline: true }, { name: 'Items', value: lines.slice(0, 1024) });
+    const rows = [new ActionRowBuilder().addComponents(
+        toggleButton('shop', s.enabled),
+        new ButtonBuilder().setCustomId('setup:shop:add').setLabel('Add Item').setEmoji('➕').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId('setup:shop:post').setLabel('Post Shop').setEmoji('📨').setStyle(ButtonStyle.Primary),
+    )];
+    if (s.items.length) {
+        rows.push(new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('setup:shop:remove').setPlaceholder('🗑️ Remove an item…')
+            .addOptions(s.items.map((it, i) => ({ label: `${it.name}`.slice(0, 90), value: String(i), description: `${it.price}` })))));
+    }
+    rows.push(backRow());
+    return { embeds: [embed], components: rows };
+};
+
+// ---- Auto purge -----------------------------------------------------------
+PANELS.autopurge = cfg => {
+    const list = cfg.autopurge.tasks || [];
+    const lines = list.length ? list.map((t, i) => `**${i + 1}.** <#${t.channelId}> every ${t.everyHours}h${t.keepPinned ? ' (keep pinned)' : ''}`).join('\n') : '*No purge tasks.*';
+    const embed = new EmbedBuilder().setColor(0xef4444).setTitle('🧽 Auto Purge')
+        .setDescription('Periodically bulk-deletes recent messages in a channel (e.g. a spam or commands channel). Messages older than 14 days can\'t be bulk-deleted by Discord.')
+        .addFields({ name: 'Tasks', value: lines.slice(0, 1024) });
+    const rows = [new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('setup:autopurge:add').setLabel('Add Task').setEmoji('➕').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId('setup:autopurge:now').setLabel('Purge All Now').setEmoji('🧽').setStyle(ButtonStyle.Danger).setDisabled(!list.length),
+    )];
+    if (list.length) {
+        rows.push(new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('setup:autopurge:remove').setPlaceholder('🗑️ Remove a task…')
+            .addOptions(list.map((t, i) => ({ label: `#${i + 1} · every ${t.everyHours}h`, value: String(i) })))));
+    }
+    rows.push(backRow());
+    return { embeds: [embed], components: rows };
+};
+
+// ---- Nickname filter ------------------------------------------------------
+PANELS.nickfilter = cfg => {
+    const n = cfg.nickfilter;
+    const embed = new EmbedBuilder().setColor(ACCENT).setTitle('🪪 Nickname Filter')
+        .setDescription('Checks nicknames on join and change against a banned list.')
+        .addFields(
+            { name: 'Status', value: onoff(n.enabled), inline: true },
+            { name: 'Action', value: n.action === 'kick' ? 'Kick' : 'Reset nickname', inline: true },
+            { name: 'Words', value: n.words.length ? `${n.words.length} configured` : '*none*', inline: true },
+        );
+    return {
+        embeds: [embed], components: [
+            new ActionRowBuilder().addComponents(
+                toggleButton('nickfilter', n.enabled),
+                new ButtonBuilder().setCustomId('setup:nickfilter:words').setLabel('Edit Words').setEmoji('✏️').setStyle(ButtonStyle.Primary),
+                new ButtonBuilder().setCustomId('setup:nickfilter:action').setLabel(n.action === 'kick' ? 'Switch to Rename' : 'Switch to Kick').setEmoji('🔁').setStyle(ButtonStyle.Secondary),
+            ),
+            backRow(),
+        ],
+    };
+};
+
+// ---- Help / About ---------------------------------------------------------
+PANELS.help = cfg => {
+    const name = cfg.branding.displayName || BRAND;
+    const embed = new EmbedBuilder().setColor(parseColor(cfg.branding.accentColor)).setTitle(`ℹ️ ${name} — Setup Help`)
+        .setDescription(`This panel configures **${SECTIONS.length}** systems, grouped below. Pick any from the main menu; each saves instantly and runs live.`)
+        .addFields(GROUPS.map(g => ({
+            name: `${g.emoji} ${g.label}`,
+            value: SECTIONS.filter(s => s.group === g.id).map(s => `${s.emoji} **${s.label}** — ${s.desc}`).join('\n').slice(0, 1024),
+            inline: false,
+        })))
+        .setFooter({ text: 'Tip: use Backup → Export to save your config as a file.' });
+    if (cfg.branding.supportInvite) embed.addFields({ name: 'Support', value: cfg.branding.supportInvite });
+    return { embeds: [embed], components: [backRow()] };
+};
+
+// ---- Mass role ------------------------------------------------------------
+PANELS.massrole = cfg => {
+    const embed = new EmbedBuilder().setColor(ACCENT).setTitle('👥 Mass Role')
+        .setDescription('Select a role below, then apply it to (or remove it from) **every member**. On large servers this can take a little while; bots are skipped.');
+    return {
+        embeds: [embed], components: [
+            new ActionRowBuilder().addComponents(new RoleSelectMenuBuilder().setCustomId('setup:massrole:role').setPlaceholder('🎭 Pick the role to apply').setMaxValues(1)),
+            new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('setup:massrole:addall').setLabel('Add to Everyone').setEmoji('➕').setStyle(ButtonStyle.Success),
+                new ButtonBuilder().setCustomId('setup:massrole:removeall').setLabel('Remove from Everyone').setEmoji('➖').setStyle(ButtonStyle.Danger),
+                new ButtonBuilder().setCustomId('setup:massrole:humans').setLabel('Add to Humans Only').setEmoji('👤').setStyle(ButtonStyle.Primary),
+            ),
+            backRow(),
+        ],
+    };
+};
+
+// ---- Invite tracker -------------------------------------------------------
+PANELS.invites = cfg => {
+    const i = cfg.invites;
+    const top = [...i.counts].sort((a, b) => b.count - a.count).slice(0, 5).map((c, n) => `**${n + 1}.** <@${c.userId}> — ${c.count} invite(s)`).join('\n') || '*no data yet*';
+    const embed = new EmbedBuilder().setColor(ACCENT).setTitle('📨 Invite Tracker')
+        .setDescription('Detects which invite each new member used and credits the inviter. Requires the **Manage Server** permission.')
+        .addFields(
+            { name: 'Status', value: onoff(i.enabled), inline: true },
+            { name: 'Announce channel', value: chanMention(i.channelId), inline: true },
+            { name: 'Top inviters', value: top, inline: false },
+        );
+    return {
+        embeds: [embed], components: [
+            new ActionRowBuilder().addComponents(new ChannelSelectMenuBuilder().setCustomId('setup:invites:channel').setPlaceholder('📢 Join-announce channel').setMinValues(0).addChannelTypes(ChannelType.GuildText)),
+            new ActionRowBuilder().addComponents(
+                toggleButton('invites', i.enabled),
+                new ButtonBuilder().setCustomId('setup:invites:reset').setLabel('Reset Counts').setEmoji('♻️').setStyle(ButtonStyle.Danger),
+            ),
+            backRow(),
+        ],
+    };
+};
+
+// ---- Diagnostics ----------------------------------------------------------
+PANELS.diagnostics = cfg => {
+    const embed = new EmbedBuilder().setColor(ACCENT).setTitle('🩺 Diagnostics')
+        .setDescription('Run a health check on the bot\'s permissions and your enabled systems. Catches the most common "why isn\'t this working?" problems.');
+    return {
+        embeds: [embed], components: [
+            new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('setup:diagnostics:run').setLabel('Run Checks').setEmoji('🩺').setStyle(ButtonStyle.Primary)),
+            backRow(),
+        ],
+    };
+};
+
 function renderSection(key, cfg) {
     const fn = PANELS[key];
     return fn ? fn(cfg) : homePanel(cfg);
+}
+
+// Build a diagnostics report for a guild + config.
+function diagnosticsReport(guild, cfg) {
+    const me = guild.members.me;
+    const P = PermissionFlagsBits;
+    const lines = [];
+    const check = (ok, label) => lines.push(`${ok ? '✅' : '⚠️'} ${label}`);
+
+    check(me.permissions.has(P.Administrator), 'Bot has Administrator (recommended)');
+    check(me.permissions.has(P.ManageRoles), 'Manage Roles (autorole, self-roles, leveling, shop)');
+    check(me.permissions.has(P.ManageChannels), 'Manage Channels (tickets, temp voice, stats)');
+    check(me.permissions.has(P.ManageMessages), 'Manage Messages (filters, sticky, purge)');
+    check(me.permissions.has(P.ModerateMembers), 'Timeout Members (anti-spam, warnings)');
+    check(me.permissions.has(P.KickMembers) && me.permissions.has(P.BanMembers), 'Kick & Ban (anti-raid, join gate)');
+    check(me.permissions.has(P.ManageNicknames), 'Manage Nicknames (dehoist, nickname filter)');
+
+    const chanOk = id => !id || guild.channels.cache.has(id);
+    const roleOk = id => !id || guild.roles.cache.has(id);
+    if (cfg.welcome.enabled) check(chanOk(cfg.welcome.channelId) && cfg.welcome.channelId, 'Welcome: channel set & exists');
+    if (cfg.verification.enabled) check(roleOk(cfg.verification.roleId) && cfg.verification.roleId, 'Verification: verified role set & exists');
+    if (cfg.tickets.enabled) check(roleOk(cfg.tickets.staffRoleId) && cfg.tickets.staffRoleId, 'Tickets: staff role set & exists');
+    if (cfg.starboard.enabled) check(chanOk(cfg.starboard.channelId) && cfg.starboard.channelId, 'Starboard: channel set & exists');
+    if (cfg.suggestions.enabled) check(chanOk(cfg.suggestions.channelId) && cfg.suggestions.channelId, 'Suggestions: channel set & exists');
+    if (cfg.counting.enabled) check(chanOk(cfg.counting.channelId) && cfg.counting.channelId, 'Counting: channel set & exists');
+    if (cfg.tempvoice.enabled) check(chanOk(cfg.tempvoice.hubChannelId) && cfg.tempvoice.hubChannelId, 'Temp Voice: hub channel set & exists');
+    if (cfg.birthdays.enabled) check(chanOk(cfg.birthdays.channelId) && cfg.birthdays.channelId, 'Birthdays: channel set & exists');
+    if (cfg.economy.enabled && cfg.shop.enabled) check(cfg.shop.items.every(it => roleOk(it.roleId)), 'Shop: all item roles exist');
+    if (cfg.modtools.muteRoleId) check(roleOk(cfg.modtools.muteRoleId), 'Mod Tools: mute role exists');
+    if (cfg.leveling.enabled) check(cfg.leveling.rewards.every(r => roleOk(r.roleId)), 'Leveling: all reward roles exist');
+    if (cfg.autorole.enabled) check([...cfg.autorole.humanRoleIds, ...cfg.autorole.botRoleIds].every(roleOk), 'Auto Roles: all roles exist');
+    if (cfg.invites.enabled) check(me.permissions.has(P.ManageGuild), 'Invite Tracker: Manage Server permission present');
+    if (cfg.logging.enabled) check([cfg.logging.memberLogId, cfg.logging.messageLogId, cfg.logging.modLogId, cfg.logging.voiceLogId].some(Boolean), 'Logging: at least one log channel set');
+    if (cfg.verification.enabled) check(chanOk(cfg.verification.channelId) && cfg.verification.channelId, 'Verification: verify channel set & exists');
+
+    const warnCount = lines.filter(l => l.startsWith('⚠️')).length;
+    return new EmbedBuilder()
+        .setColor(warnCount ? 0xf59e0b : 0x22c55e)
+        .setTitle(`🩺 Diagnostics — ${warnCount ? `${warnCount} issue(s)` : 'all good'}`)
+        .setDescription(lines.join('\n').slice(0, 4000))
+        .setFooter({ text: warnCount ? 'Fix the ⚠️ items above.' : 'Everything checks out!' });
 }
 
 // ----------------------------------------------------------------------------
@@ -1233,11 +1840,37 @@ const ACTIONS = {
         const key = `${interaction.guildId}:${interaction.user.id}`;
         if (action === 'toggle') { l.enabled = !l.enabled; return saveAnd(interaction, cfg, 'logging'); }
         if (action === 'pick') { pendingLog.set(key, interaction.values[0]); return interaction.deferUpdate(); }
+        if (action === 'ignore') { l.ignoredChannelIds = interaction.values; return saveAnd(interaction, cfg, 'logging'); }
         if (action === 'channel') {
             const target = pendingLog.get(key) || 'memberLogId';
             l[target] = interaction.values[0];
             pendingLog.delete(key);
             return saveAnd(interaction, cfg, 'logging');
+        }
+    },
+
+    // ---- Server lockdown --------------------------------------------------
+    async serverlock(interaction, cfg, action) {
+        const s = cfg.serverlock;
+        if (action === 'reason') return showModal(interaction, 'setup:serverlock:reason_modal', 'Lockdown Reason', [
+            modalInput('reason', 'Reason', TextInputStyle.Short, s.reason, true),
+        ]);
+        if (action === 'lock' || action === 'unlock') {
+            await interaction.deferUpdate();
+            const everyone = interaction.guild.roles.everyone;
+            const lock = action === 'lock';
+            const channels = interaction.guild.channels.cache.filter(c => c.type === ChannelType.GuildText);
+            const touched = [];
+            for (const ch of channels.values()) {
+                const ok = await ch.permissionOverwrites.edit(everyone, { SendMessages: lock ? false : null }, { reason: `Lockdown: ${s.reason}` }).then(() => true).catch(() => false);
+                if (ok) touched.push(ch.id);
+            }
+            s.active = lock;
+            s.lockedChannels = lock ? touched : [];
+            cfg.markModified('serverlock'); await cfg.save();
+            const announce = cfg.branding.modLogChannelId && interaction.guild.channels.cache.get(cfg.branding.modLogChannelId);
+            if (announce) await announce.send(`${lock ? '🔒' : '🔓'} Server ${lock ? 'locked' : 'unlocked'} by ${interaction.user} (${touched.length} channels)${lock ? ` — ${s.reason}` : ''}.`).catch(() => null);
+            return interaction.editReply(renderSection('serverlock', cfg));
         }
     },
 
@@ -1297,6 +1930,7 @@ const ACTIONS = {
             cfg.reactionRoles.splice(Number(interaction.values[0]), 1);
             return saveAnd(interaction, cfg, 'reactionRoles');
         }
+        if (action === 'clear') { cfg.reactionRoles = []; return saveAnd(interaction, cfg, 'reactionRoles'); }
     },
 
     async autoresponders(interaction, cfg, action) {
@@ -1309,6 +1943,7 @@ const ACTIONS = {
             cfg.autoresponders.splice(Number(interaction.values[0]), 1);
             return saveAnd(interaction, cfg, 'autoresponders');
         }
+        if (action === 'clear') { cfg.autoresponders = []; return saveAnd(interaction, cfg, 'autoresponders'); }
     },
 
     async antispam(interaction, cfg, action) {
@@ -1380,6 +2015,7 @@ const ACTIONS = {
             modalInput('xpPerMessage', 'XP per message', TextInputStyle.Short, String(l.xpPerMessage), true),
             modalInput('cooldownSeconds', 'Cooldown seconds', TextInputStyle.Short, String(l.cooldownSeconds), true),
             modalInput('multiplier', 'Global multiplier (e.g. 1.5)', TextInputStyle.Short, String(l.multiplier), false),
+            modalInput('voiceXpPerMin', 'Voice XP per minute (0 = off)', TextInputStyle.Short, String(l.voiceXpPerMin), false),
         ]);
         if (action === 'reward') return showModal(interaction, 'setup:leveling:reward_modal', 'Level Reward', [
             modalInput('level', 'Level', TextInputStyle.Short, '', true),
@@ -1410,6 +2046,22 @@ const ACTIONS = {
             modalInput('userId', 'User ID', TextInputStyle.Short, '', true),
             modalInput('amount', 'Amount (negative to take)', TextInputStyle.Short, '', true),
         ]);
+        if (action === 'panel') {
+            const embed = new EmbedBuilder().setColor(0xf59e0b).setTitle(`${e.symbol} ${e.currencyName[0].toUpperCase() + e.currencyName.slice(1)}`)
+                .setDescription(`Earn ${e.symbol} by chatting, claiming your **daily**, and **working**. Spend it in the shop!`)
+                .addFields(
+                    { name: '📅 Daily', value: `${e.dailyAmount}`, inline: true },
+                    { name: '💼 Work', value: `${e.workMin}–${e.workMax}`, inline: true },
+                );
+            const row = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('setpub:eco:daily').setLabel('Daily').setEmoji('📅').setStyle(ButtonStyle.Success),
+                new ButtonBuilder().setCustomId('setpub:eco:work').setLabel('Work').setEmoji('💼').setStyle(ButtonStyle.Primary),
+                new ButtonBuilder().setCustomId('setpub:eco:balance').setLabel('Balance').setEmoji('💰').setStyle(ButtonStyle.Secondary),
+                new ButtonBuilder().setCustomId('setpub:eco:top').setLabel('Leaderboard').setEmoji('🏆').setStyle(ButtonStyle.Secondary),
+            );
+            await interaction.channel.send({ embeds: [embed], components: [row] }).catch(() => null);
+            return safeReply(interaction, '📨 Posted the economy member panel here.');
+        }
     },
 
     // ---- Embed builder ----------------------------------------------------
@@ -1574,6 +2226,308 @@ const ACTIONS = {
             modalInput('maxMentions', 'Max mentions per message (0 = off)', TextInputStyle.Short, String(m.maxMentions), true),
         ]);
     },
+
+    // ---- Counting ---------------------------------------------------------
+    async counting(interaction, cfg, action) {
+        const c = cfg.counting;
+        if (action === 'toggle') c.enabled = !c.enabled;
+        if (action === 'channel') c.channelId = interaction.values[0];
+        if (action === 'fail') c.resetOnFail = !c.resetOnFail;
+        if (action === 'reset') { c.current = 0; c.lastUserId = null; }
+        return saveAnd(interaction, cfg, 'counting');
+    },
+
+    // ---- Boost ------------------------------------------------------------
+    async boost(interaction, cfg, action) {
+        const b = cfg.boost;
+        if (action === 'toggle') { b.enabled = !b.enabled; return saveAnd(interaction, cfg, 'boost'); }
+        if (action === 'channel') { b.channelId = interaction.values[0]; return saveAnd(interaction, cfg, 'boost'); }
+        if (action === 'msg') return showModal(interaction, 'setup:boost:msg_modal', 'Boost Message', [
+            modalInput('message', 'Use {user.mention} and {server}', TextInputStyle.Paragraph, b.message, true),
+        ]);
+    },
+
+    // ---- Dropdown roles ---------------------------------------------------
+    async dropdownroles(interaction, cfg, action, arg) {
+        const idx = Number(arg);
+        if (action === 'new') return showModal(interaction, 'setup:dropdownroles:new_modal', 'New Dropdown Menu', [
+            modalInput('title', 'Menu title', TextInputStyle.Short, 'Pick your roles', true),
+            modalInput('placeholder', 'Menu placeholder', TextInputStyle.Short, 'Select roles…', false),
+        ]);
+        if (action === 'pick') return update(interaction, PANELS._dropdownMenu(cfg, Number(interaction.values[0])));
+        if (action === 'back') return update(interaction, PANELS.dropdownroles(cfg));
+        if (action === 'addrole') {
+            const m = cfg.dropdownroles.menus[idx];
+            if (!m) return safeReply(interaction, '❌ Menu gone.');
+            if (m.roles.length >= 25) return safeReply(interaction, '❌ Max 25 roles per menu.');
+            const roleId = interaction.values[0];
+            if (m.roles.some(r => r.roleId === roleId)) return safeReply(interaction, '❌ Already added.');
+            const role = interaction.guild.roles.cache.get(roleId);
+            m.roles.push({ roleId, label: (role?.name || 'Role').slice(0, 40), emoji: '', description: '' });
+            cfg.markModified('dropdownroles'); await cfg.save();
+            return update(interaction, PANELS._dropdownMenu(cfg, idx));
+        }
+        if (action === 'clearroles') { cfg.dropdownroles.menus[idx].roles = []; cfg.markModified('dropdownroles'); await cfg.save(); return update(interaction, PANELS._dropdownMenu(cfg, idx)); }
+        if (action === 'delete') { cfg.dropdownroles.menus.splice(idx, 1); return saveAnd(interaction, cfg, 'dropdownroles'); }
+        if (action === 'range') return showModal(interaction, `setup:dropdownroles:range_modal:${idx}`, 'Pick Range', [
+            modalInput('min', 'Minimum picks (0+)', TextInputStyle.Short, String(cfg.dropdownroles.menus[idx]?.min ?? 0), true),
+            modalInput('max', 'Maximum picks', TextInputStyle.Short, String(cfg.dropdownroles.menus[idx]?.max ?? 1), true),
+        ]);
+        if (action === 'post') {
+            const m = cfg.dropdownroles.menus[idx];
+            if (!m || !m.roles.length) return safeReply(interaction, '❌ Add at least one role first.');
+            const ch = interaction.guild.channels.cache.get(interaction.values[0]);
+            if (!ch) return safeReply(interaction, '❌ Channel not found.');
+            const sent = await ch.send(dropdownRoleMessage(m, idx)).catch(() => null);
+            if (!sent) return safeReply(interaction, '❌ Could not post (check my permissions).');
+            m.messageId = sent.id; m.channelId = ch.id;
+            cfg.markModified('dropdownroles'); await cfg.save();
+            return update(interaction, PANELS._dropdownMenu(cfg, idx));
+        }
+    },
+
+    // ---- Sticky roles -----------------------------------------------------
+    async stickyroles(interaction, cfg, action) {
+        const s = cfg.stickyroles;
+        if (action === 'toggle') s.enabled = !s.enabled;
+        if (action === 'clear') s.store = [];
+        return saveAnd(interaction, cfg, 'stickyroles');
+    },
+
+    // ---- Scheduled messages -----------------------------------------------
+    async scheduled(interaction, cfg, action) {
+        if (action === 'add') return showModal(interaction, 'setup:scheduled:add_modal', 'Add Scheduled Message', [
+            modalInput('channelId', 'Channel ID', TextInputStyle.Short, '', true),
+            modalInput('content', 'Message', TextInputStyle.Paragraph, '', true),
+            modalInput('intervalMinutes', 'Every how many minutes', TextInputStyle.Short, '60', true),
+        ]);
+        if (action === 'remove') { cfg.scheduled.messages.splice(Number(interaction.values[0]), 1); return saveAnd(interaction, cfg, 'scheduled'); }
+        if (action === 'sendall') {
+            await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
+            let sent = 0;
+            for (const sm of cfg.scheduled.messages) {
+                const ch = interaction.guild.channels.cache.get(sm.channelId);
+                if (ch) { await ch.send(sm.embed ? { embeds: [new EmbedBuilder().setColor(ACCENT).setDescription(sm.content)] } : { content: sm.content.slice(0, 2000) }).catch(() => null); sm.lastRun = Date.now(); sent++; }
+            }
+            cfg.markModified('scheduled'); await cfg.save().catch(() => null);
+            return interaction.editReply(`📨 Sent **${sent}** scheduled message(s) now.`);
+        }
+    },
+
+    // ---- Temp voice -------------------------------------------------------
+    async tempvoice(interaction, cfg, action) {
+        const t = cfg.tempvoice;
+        if (action === 'toggle') { t.enabled = !t.enabled; return saveAnd(interaction, cfg, 'tempvoice'); }
+        if (action === 'hub') { t.hubChannelId = interaction.values[0]; return saveAnd(interaction, cfg, 'tempvoice'); }
+        if (action === 'category') { t.categoryId = interaction.values[0]; return saveAnd(interaction, cfg, 'tempvoice'); }
+        if (action === 'template') return showModal(interaction, 'setup:tempvoice:template_modal', 'Channel Name Template', [
+            modalInput('nameTemplate', 'Use {user}', TextInputStyle.Short, t.nameTemplate, true),
+        ]);
+    },
+
+    // ---- Ticket panel poster ----------------------------------------------
+    async ticketpanel(interaction, cfg, action) {
+        if (action === 'post') {
+            const ch = interaction.guild.channels.cache.get(interaction.values[0]);
+            if (!ch) return safeReply(interaction, '❌ Channel not found.');
+            const embed = new EmbedBuilder().setColor(ACCENT).setTitle('🎫 Need help? Open a ticket')
+                .setDescription('Choose a category below to open a private support ticket with the staff team.');
+            const menu = new StringSelectMenuBuilder().setCustomId('ticket_select').setPlaceholder('📂 Select a category…').addOptions(
+                { label: 'General Support', value: 'General', emoji: '❓' },
+                { label: 'Report a Player', value: 'Report', emoji: '🚨' },
+                { label: 'Staff Application', value: 'Application', emoji: '📝' },
+                { label: 'Billing / Donations', value: 'Billing', emoji: '💳' },
+                { label: 'Other', value: 'Other', emoji: '📦' },
+            );
+            await ch.send({ embeds: [embed], components: [new ActionRowBuilder().addComponents(menu)] }).catch(() => null);
+            return safeReply(interaction, `📨 Ticket panel posted in ${ch}.`);
+        }
+    },
+
+    // ---- Backup / Restore -------------------------------------------------
+    async backup(interaction, cfg, action) {
+        if (action === 'export') {
+            const data = cfg.toObject();
+            delete data._id; delete data.__v; delete data.guildId;
+            // Strip bulky user-data arrays from the portable export.
+            if (data.leveling) data.leveling.users = [];
+            if (data.economy) data.economy.accounts = [];
+            if (data.stickyroles) data.stickyroles.store = [];
+            if (data.birthdays) data.birthdays.entries = [];
+            if (data.warnings) data.warnings.records = [];
+            const buf = Buffer.from(JSON.stringify(data, null, 2));
+            return interaction.reply({ content: '📤 Here is your configuration export.', files: [{ attachment: buf, name: `ksrp-setup-${cfg.guildId}.json` }], ...ephemeral });
+        }
+        if (action === 'import') return showModal(interaction, 'setup:backup:import_modal', 'Import Configuration', [
+            modalInput('json', 'Paste exported JSON', TextInputStyle.Paragraph, '', true),
+        ]);
+    },
+
+    // ---- Auto threads -----------------------------------------------------
+    async autothread(interaction, cfg, action) {
+        const a = cfg.autothread;
+        if (action === 'toggle') { a.enabled = !a.enabled; return saveAnd(interaction, cfg, 'autothread'); }
+        if (action === 'remove') { a.rules.splice(Number(interaction.values[0]), 1); return saveAnd(interaction, cfg, 'autothread'); }
+        if (action === 'add') return showModal(interaction, 'setup:autothread:add_modal', 'Auto Thread Rule', [
+            modalInput('channelId', 'Channel ID', TextInputStyle.Short, '', true),
+            modalInput('nameTemplate', 'Thread name template ({user})', TextInputStyle.Short, '{user}', false),
+        ]);
+    },
+
+    // ---- Poll maker -------------------------------------------------------
+    async pollmaker(interaction, cfg, action) {
+        if (action === 'channel') { cfg.embedbuilder.draft.channelId = interaction.values[0]; return saveAnd(interaction, cfg, 'pollmaker'); }
+        if (action === 'make') return showModal(interaction, 'setup:pollmaker:make_modal', 'Compose Poll', [
+            modalInput('question', 'Question', TextInputStyle.Short, '', true),
+            modalInput('options', 'Options — one per line (2-10)', TextInputStyle.Paragraph, '', true),
+        ]);
+    },
+
+    // ---- Media-only -------------------------------------------------------
+    async mediaonly(interaction, cfg, action) {
+        const m = cfg.mediaonly;
+        if (action === 'toggle') m.enabled = !m.enabled;
+        if (action === 'channels') m.channelIds = interaction.values;
+        if (action === 'links') m.allowLinks = !m.allowLinks;
+        return saveAnd(interaction, cfg, 'mediaonly');
+    },
+
+    // ---- Warnings ---------------------------------------------------------
+    async warnings(interaction, cfg, action) {
+        const w = cfg.warnings;
+        if (action === 'toggle') { w.enabled = !w.enabled; return saveAnd(interaction, cfg, 'warnings'); }
+        if (action === 'log') { w.logChannelId = interaction.values[0] || null; return saveAnd(interaction, cfg, 'warnings'); }
+        if (action === 'clearactions') { w.autoActions = []; return saveAnd(interaction, cfg, 'warnings'); }
+        if (action === 'clearrecords') { w.records = []; return saveAnd(interaction, cfg, 'warnings'); }
+        if (action === 'warn') return showModal(interaction, 'setup:warnings:warn_modal', 'Warn a User', [
+            modalInput('userId', 'User ID', TextInputStyle.Short, '', true),
+            modalInput('reason', 'Reason', TextInputStyle.Paragraph, '', true),
+        ]);
+        if (action === 'autoaction') return showModal(interaction, 'setup:warnings:autoaction_modal', 'Warning Auto-Action', [
+            modalInput('count', 'At how many warnings', TextInputStyle.Short, '3', true),
+            modalInput('action', 'Action: timeout | kick | ban', TextInputStyle.Short, 'timeout', true),
+            modalInput('durationMinutes', 'Timeout minutes (if timeout)', TextInputStyle.Short, '60', false),
+        ]);
+        if (action === 'view') return showModal(interaction, 'setup:warnings:view_modal', 'View User Warnings', [
+            modalInput('userId', 'User ID', TextInputStyle.Short, '', true),
+        ]);
+    },
+
+    // ---- Announce ping ----------------------------------------------------
+    async announceping(interaction, cfg, action) {
+        const a = cfg.announceping;
+        if (action === 'toggle') { a.enabled = !a.enabled; return saveAnd(interaction, cfg, 'announceping'); }
+        if (action === 'remove') { a.mappings.splice(Number(interaction.values[0]), 1); return saveAnd(interaction, cfg, 'announceping'); }
+        if (action === 'add') return showModal(interaction, 'setup:announceping:add_modal', 'Announce Ping Mapping', [
+            modalInput('channelId', 'Channel ID', TextInputStyle.Short, '', true),
+            modalInput('roleId', 'Role ID to ping', TextInputStyle.Short, '', true),
+        ]);
+    },
+
+    // ---- Branding ---------------------------------------------------------
+    async branding(interaction, cfg, action) {
+        const b = cfg.branding;
+        if (action === 'modlog') { b.modLogChannelId = interaction.values[0] || null; return saveAnd(interaction, cfg, 'branding'); }
+        if (action === 'edit') return showModal(interaction, 'setup:branding:edit_modal', 'Edit Branding', [
+            modalInput('displayName', 'Display name', TextInputStyle.Short, b.displayName || '', false),
+            modalInput('accentColor', 'Accent colour hex', TextInputStyle.Short, b.accentColor, false),
+            modalInput('supportInvite', 'Support server invite URL', TextInputStyle.Short, b.supportInvite || '', false),
+        ]);
+    },
+
+    // ---- Economy shop -----------------------------------------------------
+    async shop(interaction, cfg, action) {
+        const s = cfg.shop;
+        if (action === 'toggle') { s.enabled = !s.enabled; return saveAnd(interaction, cfg, 'shop'); }
+        if (action === 'remove') { s.items.splice(Number(interaction.values[0]), 1); return saveAnd(interaction, cfg, 'shop'); }
+        if (action === 'add') return showModal(interaction, 'setup:shop:add_modal', 'Add Shop Item', [
+            modalInput('name', 'Item name', TextInputStyle.Short, '', true),
+            modalInput('price', 'Price', TextInputStyle.Short, '', true),
+            modalInput('roleId', 'Role ID granted on purchase', TextInputStyle.Short, '', true),
+            modalInput('description', 'Description', TextInputStyle.Short, '', false),
+        ]);
+        if (action === 'post') {
+            if (!s.items.length) return safeReply(interaction, '❌ Add at least one item first.');
+            const ch = interaction.channel;
+            const embed = new EmbedBuilder().setColor(0xf59e0b).setTitle('🛒 Role Shop')
+                .setDescription(s.items.map((it, i) => `**${i + 1}. ${it.name}** — ${cfg.economy.symbol} ${it.price}\n${it.description || ''} → <@&${it.roleId}>`).join('\n\n'));
+            const select = new StringSelectMenuBuilder().setCustomId('setpub:shop:buy').setPlaceholder('🛒 Buy an item…')
+                .addOptions(s.items.slice(0, 25).map((it, i) => ({ label: `${it.name} (${it.price})`.slice(0, 90), value: String(i), description: (it.description || '').slice(0, 90) })));
+            await ch.send({ embeds: [embed], components: [new ActionRowBuilder().addComponents(select)] }).catch(() => null);
+            return safeReply(interaction, `📨 Shop posted in ${ch}.`);
+        }
+    },
+
+    // ---- Auto purge -------------------------------------------------------
+    async autopurge(interaction, cfg, action) {
+        if (action === 'remove') { cfg.autopurge.tasks.splice(Number(interaction.values[0]), 1); return saveAnd(interaction, cfg, 'autopurge'); }
+        if (action === 'now') {
+            await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
+            let total = 0;
+            for (const task of cfg.autopurge.tasks) {
+                const ch = interaction.guild.channels.cache.get(task.channelId);
+                if (!ch?.messages) continue;
+                const msgs = await ch.messages.fetch({ limit: 100 }).catch(() => null);
+                if (!msgs) continue;
+                const del = msgs.filter(m => (!task.keepPinned || !m.pinned) && (Date.now() - m.createdTimestamp) < 14 * 86400000);
+                if (del.size) { const done = await ch.bulkDelete(del, true).catch(() => null); total += done?.size || 0; }
+                task.lastRun = Date.now();
+            }
+            cfg.markModified('autopurge'); await cfg.save().catch(() => null);
+            return interaction.editReply(`🧽 Purged **${total}** message(s) across ${cfg.autopurge.tasks.length} task(s).`);
+        }
+        if (action === 'add') return showModal(interaction, 'setup:autopurge:add_modal', 'Add Purge Task', [
+            modalInput('channelId', 'Channel ID', TextInputStyle.Short, '', true),
+            modalInput('everyHours', 'Purge every how many hours', TextInputStyle.Short, '24', true),
+            modalInput('keepPinned', 'Keep pinned? (yes/no)', TextInputStyle.Short, 'yes', false),
+        ]);
+    },
+
+    // ---- Mass role --------------------------------------------------------
+    async massrole(interaction, cfg, action) {
+        const key = `${interaction.guildId}:${interaction.user.id}`;
+        if (action === 'role') { pendingRole.set(key, interaction.values[0]); return interaction.deferUpdate(); }
+        const roleId = pendingRole.get(key);
+        if (!roleId) return safeReply(interaction, '❌ Pick a role from the menu first.');
+        const role = interaction.guild.roles.cache.get(roleId);
+        if (!role) return safeReply(interaction, '❌ That role no longer exists.');
+        if (role.position >= interaction.guild.members.me.roles.highest.position) return safeReply(interaction, '❌ That role is above my highest role — I can\'t manage it.');
+        await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
+        const members = await interaction.guild.members.fetch().catch(() => null);
+        if (!members) return interaction.editReply('❌ Could not fetch the member list.');
+        let changed = 0;
+        for (const m of members.values()) {
+            if (action === 'humans' && m.user.bot) continue;
+            if (action === 'removeall') { if (m.roles.cache.has(roleId)) { await m.roles.remove(roleId).catch(() => null); changed++; } }
+            else { if (!m.roles.cache.has(roleId)) { await m.roles.add(roleId).catch(() => null); changed++; } }
+        }
+        const verb = action === 'removeall' ? 'Removed from' : 'Added to';
+        return interaction.editReply(`👥 ${verb} **${changed}** member(s) for ${role}.`);
+    },
+
+    // ---- Invite tracker ---------------------------------------------------
+    async invites(interaction, cfg, action) {
+        const i = cfg.invites;
+        if (action === 'toggle') i.enabled = !i.enabled;
+        if (action === 'channel') i.channelId = interaction.values[0] || null;
+        if (action === 'reset') i.counts = [];
+        return saveAnd(interaction, cfg, 'invites');
+    },
+
+    // ---- Diagnostics ------------------------------------------------------
+    async diagnostics(interaction, cfg, action) {
+        if (action === 'run') return interaction.reply({ embeds: [diagnosticsReport(interaction.guild, cfg)], ...ephemeral });
+    },
+
+    // ---- Nickname filter --------------------------------------------------
+    async nickfilter(interaction, cfg, action) {
+        const n = cfg.nickfilter;
+        if (action === 'toggle') { n.enabled = !n.enabled; return saveAnd(interaction, cfg, 'nickfilter'); }
+        if (action === 'action') { n.action = n.action === 'kick' ? 'rename' : 'kick'; return saveAnd(interaction, cfg, 'nickfilter'); }
+        if (action === 'words') return showModal(interaction, 'setup:nickfilter:words_modal', 'Banned Nickname Words', [
+            modalInput('words', 'One per line or comma-separated', TextInputStyle.Paragraph, n.words.join('\n'), false),
+        ]);
+    },
 };
 
 // ----------------------------------------------------------------------------
@@ -1676,6 +2630,7 @@ async function handleModal(interaction, section, action) {
         const l = cfg.leveling;
         l.xpPerMessage = clampInt(field(interaction, 'xpPerMessage'), l.xpPerMessage, 1, 1000);
         l.cooldownSeconds = clampInt(field(interaction, 'cooldownSeconds'), l.cooldownSeconds, 0, 3600);
+        l.voiceXpPerMin = clampInt(field(interaction, 'voiceXpPerMin'), l.voiceXpPerMin, 0, 1000);
         const mult = parseFloat(field(interaction, 'multiplier')); if (!isNaN(mult) && mult > 0) l.multiplier = Math.min(10, mult);
         return saveAnd(interaction, cfg, 'leveling');
     }
@@ -1803,7 +2758,204 @@ async function handleModal(interaction, section, action) {
         return saveAnd(interaction, cfg, 'modtools');
     }
 
+    // ---- Boost ----
+    if (section === 'boost' && action === 'msg_modal') {
+        cfg.boost.message = field(interaction, 'message') || cfg.boost.message;
+        return saveAnd(interaction, cfg, 'boost');
+    }
+
+    // ---- Dropdown roles ----
+    if (section === 'dropdownroles' && action === 'new_modal') {
+        cfg.dropdownroles.menus.push({
+            title: field(interaction, 'title').trim() || 'Pick your roles',
+            placeholder: field(interaction, 'placeholder').trim() || 'Select roles…',
+            min: 0, max: 1, roles: [], messageId: null, channelId: null,
+        });
+        cfg.markModified('dropdownroles'); await cfg.save();
+        return update(interaction, PANELS._dropdownMenu(cfg, cfg.dropdownroles.menus.length - 1));
+    }
+    if (section === 'dropdownroles' && action === 'range_modal') {
+        const idx = Number(interaction.customId.split(':')[3]);
+        const m = cfg.dropdownroles.menus[idx];
+        if (m) {
+            m.min = clampInt(field(interaction, 'min'), 0, 0, m.roles.length || 25);
+            m.max = clampInt(field(interaction, 'max'), 1, Math.max(1, m.min), m.roles.length || 25);
+        }
+        cfg.markModified('dropdownroles'); await cfg.save();
+        return update(interaction, PANELS._dropdownMenu(cfg, idx));
+    }
+
+    // ---- Scheduled ----
+    if (section === 'scheduled' && action === 'add_modal') {
+        const channelId = field(interaction, 'channelId').replace(/\D/g, '');
+        const content = field(interaction, 'content').trim();
+        const intervalMinutes = clampInt(field(interaction, 'intervalMinutes'), 60, 1, 10080);
+        if (!channelId || !content) return safeReply(interaction, '❌ Channel ID and message required.');
+        cfg.scheduled.messages.push({ channelId, content, intervalMinutes, lastRun: 0, embed: false });
+        return saveAnd(interaction, cfg, 'scheduled');
+    }
+
+    // ---- Temp voice ----
+    if (section === 'tempvoice' && action === 'template_modal') {
+        cfg.tempvoice.nameTemplate = field(interaction, 'nameTemplate') || cfg.tempvoice.nameTemplate;
+        return saveAnd(interaction, cfg, 'tempvoice');
+    }
+
+    // ---- Auto threads ----
+    if (section === 'autothread' && action === 'add_modal') {
+        const channelId = field(interaction, 'channelId').replace(/\D/g, '');
+        if (!channelId) return safeReply(interaction, '❌ Channel ID required.');
+        cfg.autothread.rules.push({ channelId, nameTemplate: field(interaction, 'nameTemplate').trim() || '{user}' });
+        return saveAnd(interaction, cfg, 'autothread');
+    }
+
+    // ---- Poll maker ----
+    if (section === 'pollmaker' && action === 'make_modal') {
+        const channelId = cfg.embedbuilder.draft.channelId;
+        if (!channelId) return safeReply(interaction, '❌ Choose a channel on the poll panel first.');
+        const ch = interaction.guild.channels.cache.get(channelId);
+        if (!ch) return safeReply(interaction, '❌ That channel no longer exists.');
+        const question = field(interaction, 'question').trim();
+        const options = field(interaction, 'options').split('\n').map(s => s.trim()).filter(Boolean).slice(0, 10);
+        if (options.length < 2) return safeReply(interaction, '❌ Provide at least 2 options.');
+        const NUM = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
+        const embed = new EmbedBuilder().setColor(ACCENT).setTitle('📊 ' + question)
+            .setDescription(options.map((o, i) => `${NUM[i]} ${o}`).join('\n\n'))
+            .setFooter({ text: `Poll by ${interaction.user.tag}` });
+        const sent = await ch.send({ embeds: [embed] }).catch(() => null);
+        if (sent) for (let i = 0; i < options.length; i++) await sent.react(NUM[i]).catch(() => null);
+        return safeReply(interaction, `📊 Poll posted in ${ch}.`);
+    }
+
+    // ---- Media-only (handled via selects/buttons; no modal) ----
+
+    // ---- Warnings ----
+    if (section === 'warnings' && action === 'warn_modal') {
+        const userId = field(interaction, 'userId').replace(/\D/g, '');
+        const reason = field(interaction, 'reason').trim() || 'No reason given';
+        if (!userId) return safeReply(interaction, '❌ Valid user ID required.');
+        cfg.warnings.records.push({ userId, reason, modId: interaction.user.id, time: Date.now() });
+        const count = cfg.warnings.records.filter(r => r.userId === userId).length;
+        cfg.markModified('warnings'); await cfg.save();
+        if (cfg.warnings.logChannelId) {
+            const ch = interaction.guild.channels.cache.get(cfg.warnings.logChannelId);
+            if (ch) await ch.send({ embeds: [new EmbedBuilder().setColor(0xf59e0b).setDescription(`⚠️ <@${userId}> warned by ${interaction.user} (now **${count}**)\n**Reason:** ${reason}`).setTimestamp()] }).catch(() => null);
+        }
+        // Apply the highest matching auto-action.
+        const act = cfg.warnings.autoActions.filter(a => a.count <= count).sort((a, b) => b.count - a.count)[0];
+        if (act) {
+            const member = await interaction.guild.members.fetch(userId).catch(() => null);
+            if (member) {
+                if (act.action === 'ban') await member.ban({ reason: `Reached ${count} warnings` }).catch(() => null);
+                else if (act.action === 'kick') await member.kick(`Reached ${count} warnings`).catch(() => null);
+                else if (act.action === 'timeout' && member.moderatable) await member.timeout((act.durationMinutes || 60) * 60000, `Reached ${count} warnings`).catch(() => null);
+            }
+        }
+        return safeReply(interaction, `⚠️ Warned <@${userId}> — they now have **${count}** warning(s).${act ? ` Auto-action: \`${act.action}\`.` : ''}`);
+    }
+    if (section === 'warnings' && action === 'view_modal') {
+        const userId = field(interaction, 'userId').replace(/\D/g, '');
+        const recs = cfg.warnings.records.filter(r => r.userId === userId);
+        if (!recs.length) return safeReply(interaction, `✅ <@${userId}> has no warnings.`);
+        const list = recs.slice(-10).map((r, i) => `**${i + 1}.** ${r.reason} — by <@${r.modId}> <t:${Math.floor(r.time / 1000)}:R>`).join('\n');
+        return interaction.reply({ embeds: [new EmbedBuilder().setColor(0xf59e0b).setTitle(`⚠️ ${recs.length} warning(s)`).setDescription(`For <@${userId}>:\n${list}`)], ...ephemeral });
+    }
+    if (section === 'warnings' && action === 'autoaction_modal') {
+        const count = clampInt(field(interaction, 'count'), 0, 1, 100);
+        let act = field(interaction, 'action').trim().toLowerCase();
+        if (!['timeout', 'kick', 'ban'].includes(act)) act = 'timeout';
+        const durationMinutes = clampInt(field(interaction, 'durationMinutes'), 60, 1, 40320);
+        if (!count) return safeReply(interaction, '❌ Need a warning count.');
+        cfg.warnings.autoActions = cfg.warnings.autoActions.filter(a => a.count !== count);
+        cfg.warnings.autoActions.push({ count, action: act, durationMinutes });
+        return saveAnd(interaction, cfg, 'warnings');
+    }
+
+    // ---- Announce ping ----
+    if (section === 'announceping' && action === 'add_modal') {
+        const channelId = field(interaction, 'channelId').replace(/\D/g, '');
+        const roleId = field(interaction, 'roleId').replace(/\D/g, '');
+        if (!channelId || !roleId) return safeReply(interaction, '❌ Channel ID and role ID required.');
+        cfg.announceping.mappings.push({ channelId, roleId });
+        return saveAnd(interaction, cfg, 'announceping');
+    }
+
+    // ---- Branding ----
+    if (section === 'branding' && action === 'edit_modal') {
+        const b = cfg.branding;
+        b.displayName = field(interaction, 'displayName').trim() || null;
+        const c = field(interaction, 'accentColor').trim(); if (/^#?[0-9a-f]{6}$/i.test(c)) b.accentColor = c.startsWith('#') ? c : `#${c}`;
+        b.supportInvite = field(interaction, 'supportInvite').trim() || null;
+        return saveAnd(interaction, cfg, 'branding');
+    }
+
+    // ---- Economy shop ----
+    if (section === 'shop' && action === 'add_modal') {
+        const name = field(interaction, 'name').trim();
+        const price = clampInt(field(interaction, 'price'), 0, 0, 1e9);
+        const roleId = field(interaction, 'roleId').replace(/\D/g, '');
+        if (!name || !roleId) return safeReply(interaction, '❌ Name and role ID required.');
+        cfg.shop.items.push({ name, price, roleId, description: field(interaction, 'description').trim() });
+        return saveAnd(interaction, cfg, 'shop');
+    }
+
+    // ---- Auto purge ----
+    if (section === 'autopurge' && action === 'add_modal') {
+        const channelId = field(interaction, 'channelId').replace(/\D/g, '');
+        const everyHours = clampInt(field(interaction, 'everyHours'), 24, 1, 720);
+        const keepPinned = /^y/i.test(field(interaction, 'keepPinned').trim());
+        if (!channelId) return safeReply(interaction, '❌ Channel ID required.');
+        cfg.autopurge.tasks.push({ channelId, everyHours, lastRun: Date.now(), keepPinned });
+        return saveAnd(interaction, cfg, 'autopurge');
+    }
+
+    // ---- Nickname filter ----
+    if (section === 'nickfilter' && action === 'words_modal') {
+        cfg.nickfilter.words = field(interaction, 'words').split(/[\n,]+/).map(w => w.trim().toLowerCase()).filter(Boolean);
+        return saveAnd(interaction, cfg, 'nickfilter');
+    }
+
+    // ---- Server lockdown ----
+    if (section === 'serverlock' && action === 'reason_modal') {
+        cfg.serverlock.reason = field(interaction, 'reason').trim() || cfg.serverlock.reason;
+        return saveAnd(interaction, cfg, 'serverlock');
+    }
+
+    // ---- Backup import ----
+    if (section === 'backup' && action === 'import_modal') {
+        let data;
+        try { data = JSON.parse(field(interaction, 'json')); }
+        catch { return safeReply(interaction, '❌ That is not valid JSON.'); }
+        if (!data || typeof data !== 'object') return safeReply(interaction, '❌ Invalid configuration.');
+        // Merge known top-level config keys; never overwrite identity/user data.
+        const skip = new Set(['_id', '__v', 'guildId']);
+        for (const key of Object.keys(data)) {
+            if (skip.has(key)) continue;
+            if (key in cfg.schema.paths || cfg.schema.nested?.[key] || cfg[key] !== undefined) { cfg[key] = data[key]; cfg.markModified(key); }
+        }
+        await cfg.save().catch(() => null);
+        return update(interaction, homePanel(cfg));
+    }
+
     return safeReply(interaction, '⚠️ Unhandled modal.');
+}
+
+// Dropdown-role posted message: a select menu users choose roles from.
+function dropdownRoleMessage(menu, idx) {
+    const embed = new EmbedBuilder().setColor(ACCENT).setTitle(menu.title)
+        .setDescription(menu.roles.map(r => `${r.emoji || '•'} <@&${r.roleId}>`).join('\n') || 'No roles');
+    const select = new StringSelectMenuBuilder()
+        .setCustomId(`setpub:droles:${idx}`)
+        .setPlaceholder(menu.placeholder || 'Select roles…')
+        .setMinValues(Math.min(menu.min, menu.roles.length))
+        .setMaxValues(Math.max(1, Math.min(menu.max, menu.roles.length)))
+        .addOptions(menu.roles.map(r => {
+            const o = { label: r.label || 'Role', value: r.roleId };
+            if (r.emoji) o.emoji = r.emoji;
+            if (r.description) o.description = r.description.slice(0, 90);
+            return o;
+        }));
+    return { embeds: [embed], components: [new ActionRowBuilder().addComponents(select)] };
 }
 
 // Helpers shared by the embed builder, self-roles and economy/leveling.
@@ -1979,6 +3131,8 @@ const spamState = new Map();   // userId -> timestamps[]
 const raidState = new Map();   // guildId -> timestamps[]
 const pendingLog = new Map();  // guildId:userId -> which log channel is being set
 const xpCooldown = new Map();  // guildId:userId -> last XP grant timestamp
+const inviteCache = new Map(); // guildId -> Map(inviteCode -> uses)
+const pendingRole = new Map(); // guildId:userId -> role chosen in the Mass Role panel
 
 function init(client) {
     if (client._setupInit) return;
@@ -2024,6 +3178,7 @@ function init(client) {
         if (!message.guild || message.author?.bot) return;
         const cfg = await getConfig(message.guild.id).catch(() => null);
         if (!cfg) return;
+        if (cfg.logging.ignoredChannelIds.includes(message.channelId)) return;
         await logEvent(message.guild, cfg, 'messageLogId',
             new EmbedBuilder().setColor(0xf59e0b).setAuthor({ name: message.author?.tag || 'Unknown', iconURL: message.author?.displayAvatarURL() })
                 .setDescription(`🗑️ Message by ${message.author} deleted in ${message.channel}\n${(message.content || '*no text*').slice(0, 1000)}`).setTimestamp());
@@ -2032,6 +3187,7 @@ function init(client) {
         if (!newM.guild || newM.author?.bot || oldM.content === newM.content) return;
         const cfg = await getConfig(newM.guild.id).catch(() => null);
         if (!cfg) return;
+        if (cfg.logging.ignoredChannelIds.includes(newM.channelId)) return;
         await logEvent(newM.guild, cfg, 'messageLogId',
             new EmbedBuilder().setColor(0x3b82f6).setAuthor({ name: newM.author.tag, iconURL: newM.author.displayAvatarURL() })
                 .setDescription(`✏️ Message by ${newM.author} edited in ${newM.channel} — [jump](${newM.url})`)
@@ -2044,6 +3200,89 @@ function init(client) {
         if (!cfg) return;
         await logEvent(ban.guild, cfg, 'modLogId',
             new EmbedBuilder().setColor(0xef4444).setDescription(`🔨 **${ban.user.tag}** was banned.`).setTimestamp());
+    });
+    client.on(Events.GuildBanRemove, async ban => {
+        const cfg = await getConfig(ban.guild.id).catch(() => null);
+        if (!cfg) return;
+        await logEvent(ban.guild, cfg, 'modLogId',
+            new EmbedBuilder().setColor(0x22c55e).setDescription(`♻️ **${ban.user.tag}** was unbanned.`).setTimestamp());
+    });
+    client.on(Events.ChannelCreate, async channel => {
+        if (!channel.guild) return;
+        const cfg = await getConfig(channel.guild.id).catch(() => null);
+        if (!cfg) return;
+        await logEvent(channel.guild, cfg, 'modLogId',
+            new EmbedBuilder().setColor(0x22c55e).setDescription(`📺 Channel created: **#${channel.name}**`).setTimestamp());
+    });
+    client.on(Events.ChannelDelete, async channel => {
+        if (!channel.guild) return;
+        const cfg = await getConfig(channel.guild.id).catch(() => null);
+        if (!cfg) return;
+        await logEvent(channel.guild, cfg, 'modLogId',
+            new EmbedBuilder().setColor(0xef4444).setDescription(`🗑️ Channel deleted: **#${channel.name}**`).setTimestamp());
+    });
+    client.on(Events.GuildRoleCreate, async role => {
+        const cfg = await getConfig(role.guild.id).catch(() => null);
+        if (!cfg) return;
+        await logEvent(role.guild, cfg, 'modLogId',
+            new EmbedBuilder().setColor(0x22c55e).setDescription(`🎭 Role created: ${role}`).setTimestamp());
+    });
+    client.on(Events.GuildRoleDelete, async role => {
+        const cfg = await getConfig(role.guild.id).catch(() => null);
+        if (!cfg) return;
+        await logEvent(role.guild, cfg, 'modLogId',
+            new EmbedBuilder().setColor(0xef4444).setDescription(`🎭 Role deleted: **${role.name}**`).setTimestamp());
+    });
+    client.on(Events.GuildEmojiCreate, async emoji => {
+        const cfg = await getConfig(emoji.guild.id).catch(() => null);
+        if (!cfg) return;
+        await logEvent(emoji.guild, cfg, 'modLogId',
+            new EmbedBuilder().setColor(0x22c55e).setDescription(`😀 Emoji added: ${emoji} \`:${emoji.name}:\``).setTimestamp());
+    });
+    client.on(Events.GuildEmojiDelete, async emoji => {
+        const cfg = await getConfig(emoji.guild.id).catch(() => null);
+        if (!cfg) return;
+        await logEvent(emoji.guild, cfg, 'modLogId',
+            new EmbedBuilder().setColor(0xef4444).setDescription(`😀 Emoji deleted: \`:${emoji.name}:\``).setTimestamp());
+    });
+
+    // Mod log: member timeouts (start & clear).
+    client.on(Events.GuildMemberUpdate, async (oldM, newM) => {
+        const cfg = await getConfig(newM.guild.id).catch(() => null);
+        if (!cfg?.logging.enabled || !cfg.logging.modLogId) return;
+        const was = oldM.communicationDisabledUntilTimestamp || 0;
+        const now = newM.communicationDisabledUntilTimestamp || 0;
+        if (was === now) return;
+        if (now > Date.now()) {
+            await logEvent(newM.guild, cfg, 'modLogId', new EmbedBuilder().setColor(0xf59e0b)
+                .setAuthor({ name: newM.user.tag, iconURL: newM.user.displayAvatarURL() })
+                .setDescription(`🔇 ${newM} was timed out until <t:${Math.floor(now / 1000)}:F>`).setTimestamp());
+        } else if (was > Date.now()) {
+            await logEvent(newM.guild, cfg, 'modLogId', new EmbedBuilder().setColor(0x22c55e)
+                .setAuthor({ name: newM.user.tag, iconURL: newM.user.displayAvatarURL() })
+                .setDescription(`🔊 ${newM}'s timeout was lifted.`).setTimestamp());
+        }
+    });
+
+    // Member log: nickname & role changes
+    client.on(Events.GuildMemberUpdate, async (oldM, newM) => {
+        const cfg = await getConfig(newM.guild.id).catch(() => null);
+        if (!cfg?.logging.enabled || !cfg.logging.memberLogId) return;
+        if (oldM.nickname !== newM.nickname) {
+            await logEvent(newM.guild, cfg, 'memberLogId', new EmbedBuilder().setColor(0x3b82f6)
+                .setAuthor({ name: newM.user.tag, iconURL: newM.user.displayAvatarURL() })
+                .setDescription(`✏️ Nickname changed: \`${oldM.nickname || oldM.user.username}\` → \`${newM.nickname || newM.user.username}\``).setTimestamp());
+        }
+        const added = newM.roles.cache.filter(r => !oldM.roles.cache.has(r.id));
+        const removed = oldM.roles.cache.filter(r => !newM.roles.cache.has(r.id));
+        if (added.size || removed.size) {
+            const parts = [];
+            if (added.size) parts.push(`➕ ${added.map(r => r.toString()).join(' ')}`);
+            if (removed.size) parts.push(`➖ ${removed.map(r => r.toString()).join(' ')}`);
+            await logEvent(newM.guild, cfg, 'memberLogId', new EmbedBuilder().setColor(0x8b5cf6)
+                .setAuthor({ name: newM.user.tag, iconURL: newM.user.displayAvatarURL() })
+                .setDescription(`🎭 Roles updated for ${newM}\n${parts.join('\n')}`).setTimestamp());
+        }
     });
 
     // Voice log
@@ -2268,6 +3507,233 @@ function init(client) {
         if (dirty) { cfg.markModified('leveling'); cfg.markModified('economy'); cfg.markModified('sticky'); await cfg.save().catch(() => null); }
     });
 
+    // Auto-thread, media-only and announce-ping (independent listener).
+    client.on(Events.MessageCreate, async message => {
+        if (!message.guild || message.author.bot || message.system) return;
+        const cfg = await getConfig(message.guild.id).catch(() => null);
+        if (!cfg) return;
+
+        // Media-only enforcement
+        if (cfg.mediaonly.enabled && cfg.mediaonly.channelIds.includes(message.channel.id)) {
+            const hasMedia = message.attachments.size > 0 || message.embeds.some(e => e.image || e.video);
+            const hasLink = /https?:\/\/\S+/i.test(message.content);
+            if (!hasMedia && !(cfg.mediaonly.allowLinks && hasLink)) {
+                await message.delete().catch(() => null);
+                await message.channel.send({ content: `${message.author}, this channel is media-only.`, allowedMentions: { users: [message.author.id] } })
+                    .then(m => setTimeout(() => m.delete().catch(() => null), 4000)).catch(() => null);
+                return;
+            }
+        }
+
+        // Auto-thread
+        if (cfg.autothread.enabled) {
+            const rule = cfg.autothread.rules.find(r => r.channelId === message.channel.id);
+            if (rule && message.channel.threads) {
+                await message.startThread({ name: (rule.nameTemplate || '{user}').replace('{user}', message.member?.displayName || message.author.username).slice(0, 90) }).catch(() => null);
+            }
+        }
+
+        // Announce ping
+        if (cfg.announceping.enabled) {
+            const map = cfg.announceping.mappings.find(m => m.channelId === message.channel.id);
+            if (map) await message.channel.send({ content: `<@&${map.roleId}>`, allowedMentions: { roles: [map.roleId] } }).catch(() => null);
+        }
+    });
+
+    // Counting game (its own listener so other systems' early-returns don't skip it).
+    client.on(Events.MessageCreate, async message => {
+        if (!message.guild || message.author.bot) return;
+        const cfg = await getConfig(message.guild.id).catch(() => null);
+        if (!cfg?.counting.enabled || message.channel.id !== cfg.counting.channelId) return;
+        const c = cfg.counting;
+        const num = parseInt(message.content.trim(), 10);
+        const expected = c.current + 1;
+        if (isNaN(num)) return; // non-numbers are ignored, not penalised
+        if (num !== expected || message.author.id === c.lastUserId) {
+            await message.react('❌').catch(() => null);
+            if (c.resetOnFail) {
+                await message.channel.send(`💥 ${message.author} broke the chain at **${c.current}**! Back to **1**.`).catch(() => null);
+                c.current = 0; c.lastUserId = null;
+            } else {
+                await message.delete().catch(() => null);
+            }
+        } else {
+            c.current = expected; c.lastUserId = message.author.id;
+            if (c.current > c.highScore) c.highScore = c.current;
+            await message.react('✅').catch(() => null);
+        }
+        cfg.markModified('counting'); await cfg.save().catch(() => null);
+    });
+
+    // Boost announcements.
+    client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
+        if (oldMember.premiumSince || !newMember.premiumSince) return; // only on a new boost
+        const cfg = await getConfig(newMember.guild.id).catch(() => null);
+        if (!cfg?.boost.enabled || !cfg.boost.channelId) return;
+        const ch = newMember.guild.channels.cache.get(cfg.boost.channelId);
+        if (!ch) return;
+        const text = (cfg.boost.message || '').replace(/{user\.mention}/g, `<@${newMember.id}>`).replace(/{server}/g, newMember.guild.name);
+        await ch.send({ content: text, allowedMentions: { users: [newMember.id] } }).catch(() => null);
+    });
+
+    // Sticky roles: remember on leave, restore on rejoin.
+    client.on(Events.GuildMemberRemove, async member => {
+        const cfg = await getConfig(member.guild.id).catch(() => null);
+        if (!cfg?.stickyroles.enabled) return;
+        const roleIds = member.roles.cache.filter(r => r.id !== member.guild.id && !r.managed).map(r => r.id);
+        cfg.stickyroles.store = cfg.stickyroles.store.filter(s => s.userId !== member.id);
+        if (roleIds.length) cfg.stickyroles.store.push({ userId: member.id, roleIds });
+        cfg.markModified('stickyroles'); await cfg.save().catch(() => null);
+    });
+    client.on(Events.GuildMemberAdd, async member => {
+        const cfg = await getConfig(member.guild.id).catch(() => null);
+        if (!cfg?.stickyroles.enabled) return;
+        const saved = cfg.stickyroles.store.find(s => s.userId === member.id);
+        if (!saved) return;
+        for (const id of saved.roleIds) await member.roles.add(id).catch(() => null);
+        cfg.stickyroles.store = cfg.stickyroles.store.filter(s => s.userId !== member.id);
+        cfg.markModified('stickyroles'); await cfg.save().catch(() => null);
+    });
+
+    // Temp voice: create on hub join, delete when empty.
+    client.on(Events.VoiceStateUpdate, async (oldS, newS) => {
+        const guild = newS.guild || oldS.guild;
+        const cfg = await getConfig(guild.id).catch(() => null);
+        if (!cfg?.tempvoice.enabled) return;
+        const t = cfg.tempvoice;
+
+        // Joined the hub → spin up a personal channel.
+        if (newS.channelId && newS.channelId === t.hubChannelId) {
+            const parent = t.categoryId ? guild.channels.cache.get(t.categoryId) : newS.channel?.parent;
+            const ch = await guild.channels.create({
+                name: t.nameTemplate.replace('{user}', newS.member.displayName).slice(0, 90),
+                type: ChannelType.GuildVoice,
+                parent: parent?.id,
+            }).catch(() => null);
+            if (ch) {
+                t.active.push(ch.id);
+                await newS.member.voice.setChannel(ch).catch(() => null);
+                cfg.markModified('tempvoice'); await cfg.save().catch(() => null);
+            }
+        }
+
+        // Left a temp channel that is now empty → tear it down.
+        if (oldS.channelId && t.active.includes(oldS.channelId)) {
+            const ch = guild.channels.cache.get(oldS.channelId);
+            if (ch && ch.members.size === 0) {
+                await ch.delete().catch(() => null);
+                t.active = t.active.filter(id => id !== oldS.channelId);
+                cfg.markModified('tempvoice'); await cfg.save().catch(() => null);
+            }
+        }
+    });
+
+    // Scheduled messages — checked every minute.
+    setInterval(async () => {
+        const now = Date.now();
+        for (const guild of client.guilds.cache.values()) {
+            const cfg = await getConfig(guild.id).catch(() => null);
+            if (!cfg?.scheduled.messages.length) continue;
+            let dirty = false;
+            for (const sm of cfg.scheduled.messages) {
+                if (now - (sm.lastRun || 0) < sm.intervalMinutes * 60000) continue;
+                const ch = guild.channels.cache.get(sm.channelId);
+                if (ch) await ch.send(sm.embed ? { embeds: [new EmbedBuilder().setColor(ACCENT).setDescription(sm.content)] } : { content: sm.content.slice(0, 2000) }).catch(() => null);
+                sm.lastRun = now; dirty = true;
+            }
+            if (dirty) { cfg.markModified('scheduled'); await cfg.save().catch(() => null); }
+        }
+    }, 60 * 1000);
+
+    // Voice XP — grant leveling XP per minute spent in a voice channel.
+    setInterval(async () => {
+        for (const guild of client.guilds.cache.values()) {
+            const cfg = await getConfig(guild.id).catch(() => null);
+            if (!cfg?.leveling.enabled || !cfg.leveling.voiceXpPerMin) continue;
+            let dirty = false;
+            for (const ch of guild.channels.cache.values()) {
+                if (ch.type !== ChannelType.GuildVoice) continue;
+                for (const m of ch.members.values()) {
+                    if (m.user.bot || m.voice.deaf || ch.id === guild.afkChannelId) continue;
+                    const u = levelUser(cfg, m.id);
+                    u.xp += Math.round(cfg.leveling.voiceXpPerMin * cfg.leveling.multiplier);
+                    while (u.xp >= xpForLevel(u.level)) {
+                        u.xp -= xpForLevel(u.level); u.level++;
+                        const reward = cfg.leveling.rewards.find(r => r.level === u.level);
+                        if (reward) await m.roles.add(reward.roleId).catch(() => null);
+                    }
+                    dirty = true;
+                }
+            }
+            if (dirty) { cfg.markModified('leveling'); await cfg.save().catch(() => null); }
+        }
+    }, 60 * 1000);
+
+    // Auto-purge tasks — checked every 5 minutes.
+    setInterval(async () => {
+        const now = Date.now();
+        for (const guild of client.guilds.cache.values()) {
+            const cfg = await getConfig(guild.id).catch(() => null);
+            if (!cfg?.autopurge.tasks.length) continue;
+            let dirty = false;
+            for (const task of cfg.autopurge.tasks) {
+                if (now - (task.lastRun || 0) < task.everyHours * 3600000) continue;
+                const ch = guild.channels.cache.get(task.channelId);
+                if (ch?.messages) {
+                    const msgs = await ch.messages.fetch({ limit: 100 }).catch(() => null);
+                    if (msgs) {
+                        const del = msgs.filter(m => (!task.keepPinned || !m.pinned) && (Date.now() - m.createdTimestamp) < 14 * 86400000);
+                        if (del.size) await ch.bulkDelete(del, true).catch(() => null);
+                    }
+                }
+                task.lastRun = now; dirty = true;
+            }
+            if (dirty) { cfg.markModified('autopurge'); await cfg.save().catch(() => null); }
+        }
+    }, 5 * 60 * 1000);
+
+    // Nickname filter — on join and on nickname change.
+    const checkNick = async member => {
+        const cfg = await getConfig(member.guild.id).catch(() => null);
+        if (!cfg?.nickfilter.enabled || !cfg.nickfilter.words.length) return;
+        const name = (member.displayName || '').toLowerCase();
+        if (!cfg.nickfilter.words.some(w => name.includes(w))) return;
+        if (cfg.nickfilter.action === 'kick') await member.kick('Nickname filter').catch(() => null);
+        else await member.setNickname(member.user.username).catch(() => null);
+    };
+    client.on(Events.GuildMemberAdd, checkNick);
+    client.on(Events.GuildMemberUpdate, (oldM, newM) => {
+        if (oldM.nickname !== newM.nickname || oldM.user.username !== newM.user.username) checkNick(newM).catch(() => null);
+    });
+
+    // Invite tracker — cache invite uses and detect which one each joiner used.
+    const cacheInvites = async guild => {
+        try { const invs = await guild.invites.fetch(); inviteCache.set(guild.id, new Map(invs.map(i => [i.code, i.uses || 0]))); } catch { /* missing Manage Server */ }
+    };
+    client.on(Events.InviteCreate, inv => { const m = inviteCache.get(inv.guild.id) || new Map(); m.set(inv.code, inv.uses || 0); inviteCache.set(inv.guild.id, m); });
+    client.on(Events.InviteDelete, inv => { inviteCache.get(inv.guild.id)?.delete(inv.code); });
+    client.on(Events.GuildMemberAdd, async member => {
+        const cfg = await getConfig(member.guild.id).catch(() => null);
+        if (!cfg?.invites.enabled) return;
+        const before = inviteCache.get(member.guild.id) || new Map();
+        let after;
+        try { after = await member.guild.invites.fetch(); } catch { return; }
+        inviteCache.set(member.guild.id, new Map(after.map(i => [i.code, i.uses || 0])));
+        const used = after.find(i => (i.uses || 0) > (before.get(i.code) || 0));
+        const inviter = used?.inviter;
+        if (inviter && !inviter.bot) {
+            let c = cfg.invites.counts.find(x => x.userId === inviter.id);
+            if (!c) { c = { userId: inviter.id, count: 0 }; cfg.invites.counts.push(c); }
+            c.count++;
+            cfg.markModified('invites'); await cfg.save().catch(() => null);
+        }
+        if (cfg.invites.channelId) {
+            const ch = member.guild.channels.cache.get(cfg.invites.channelId);
+            if (ch) await ch.send(`📨 ${member} joined — invited by ${inviter ? `**${inviter.tag}**` : 'an unknown source'}.`).catch(() => null);
+        }
+    });
+    setTimeout(() => { for (const g of client.guilds.cache.values()) cacheInvites(g); }, 5000);
+
     // Birthday checker — runs hourly, announces once per day.
     setInterval(() => runBirthdays(client).catch(() => null), 60 * 60 * 1000);
     setTimeout(() => runBirthdays(client).catch(() => null), 15000); // also shortly after boot
@@ -2375,6 +3841,68 @@ async function handlePublic(interaction) {
             else await member.roles.add(roleId).catch(() => null);
             return interaction.reply({ content: has ? `➖ Removed <@&${roleId}>.` : `➕ Added <@&${roleId}>.`, ...ephemeral });
         }
+        if (interaction.isAnySelectMenu() && kind === 'droles') {
+            const cfg = await getConfig(interaction.guildId);
+            const menu = cfg.dropdownroles.menus[Number(arg)];
+            if (!menu) return interaction.reply({ content: '❌ This menu no longer exists.', ...ephemeral });
+            const member = interaction.member;
+            const selected = new Set(interaction.values);
+            const added = [], removed = [];
+            for (const r of menu.roles) {
+                if (selected.has(r.roleId)) { if (!member.roles.cache.has(r.roleId)) { await member.roles.add(r.roleId).catch(() => null); added.push(r.roleId); } }
+                else if (member.roles.cache.has(r.roleId)) { await member.roles.remove(r.roleId).catch(() => null); removed.push(r.roleId); }
+            }
+            const parts = [];
+            if (added.length) parts.push(`➕ ${added.map(id => `<@&${id}>`).join(' ')}`);
+            if (removed.length) parts.push(`➖ ${removed.map(id => `<@&${id}>`).join(' ')}`);
+            return interaction.reply({ content: parts.join('\n') || 'No changes.', ...ephemeral });
+        }
+        if (interaction.isButton() && kind === 'eco') {
+            const cfg = await getConfig(interaction.guildId);
+            const e = cfg.economy;
+            if (!e.enabled) return interaction.reply({ content: '❌ The economy is disabled.', ...ephemeral });
+            const acc = ecoAccount(cfg, interaction.user.id);
+            const now = Date.now();
+            if (arg === 'daily') {
+                if (now - (acc.lastDaily || 0) < 86400000) {
+                    const left = Math.ceil((86400000 - (now - acc.lastDaily)) / 3600000);
+                    return interaction.reply({ content: `⏳ You already claimed your daily. Come back in ~${left}h.`, ...ephemeral });
+                }
+                acc.lastDaily = now; acc.balance += e.dailyAmount;
+                cfg.markModified('economy'); await cfg.save();
+                return interaction.reply({ content: `📅 Claimed ${e.symbol} **${e.dailyAmount}**! Balance: **${acc.balance}**.`, ...ephemeral });
+            }
+            if (arg === 'work') {
+                if (now - (acc.lastWork || 0) < 3600000) {
+                    const left = Math.ceil((3600000 - (now - acc.lastWork)) / 60000);
+                    return interaction.reply({ content: `⏳ You're tired. Work again in ~${left}m.`, ...ephemeral });
+                }
+                const earned = e.workMin + Math.floor(Math.random() * (e.workMax - e.workMin + 1));
+                acc.lastWork = now; acc.balance += earned;
+                cfg.markModified('economy'); await cfg.save();
+                return interaction.reply({ content: `💼 You worked and earned ${e.symbol} **${earned}**! Balance: **${acc.balance}**.`, ...ephemeral });
+            }
+            if (arg === 'balance') {
+                const rank = [...e.accounts].sort((a, b) => b.balance - a.balance).findIndex(a => a.userId === interaction.user.id) + 1;
+                return interaction.reply({ content: `💰 You have ${e.symbol} **${acc.balance}** — rank **#${rank}** of ${e.accounts.length}.`, ...ephemeral });
+            }
+            if (arg === 'top') {
+                const top = [...e.accounts].sort((a, b) => b.balance - a.balance).slice(0, 10).map((a, i) => `**${i + 1}.** <@${a.userId}> — ${e.symbol} ${a.balance}`).join('\n') || '*nobody yet*';
+                return interaction.reply({ embeds: [new EmbedBuilder().setColor(0xf59e0b).setTitle('🏆 Richest Members').setDescription(top)], ...ephemeral });
+            }
+        }
+        if (interaction.isAnySelectMenu() && kind === 'shop') {
+            const cfg = await getConfig(interaction.guildId);
+            const item = cfg.shop.items[Number(interaction.values[0])];
+            if (!cfg.shop.enabled || !item) return interaction.reply({ content: '❌ This item is unavailable.', ...ephemeral });
+            if (interaction.member.roles.cache.has(item.roleId)) return interaction.reply({ content: '❌ You already own that role.', ...ephemeral });
+            const acc = ecoAccount(cfg, interaction.user.id);
+            if (acc.balance < item.price) return interaction.reply({ content: `❌ You need ${cfg.economy.symbol} **${item.price}** but only have **${acc.balance}**.`, ...ephemeral });
+            acc.balance -= item.price;
+            cfg.markModified('economy'); await cfg.save();
+            await interaction.member.roles.add(item.roleId).catch(() => null);
+            return interaction.reply({ content: `✅ Bought **${item.name}** for ${cfg.economy.symbol} ${item.price}. Balance: **${acc.balance}**.`, ...ephemeral });
+        }
         if (interaction.isButton() && kind === 'bday' && arg === 'open') {
             const modal = new ModalBuilder().setCustomId('setpub:bday:save').setTitle('Set Your Birthday');
             modal.addComponents(
@@ -2452,6 +3980,8 @@ if (require.main === module) {
     cfg.leveling.rewards.push({ level: 5, roleId: '7' });
     cfg.leveling.users.push({ userId: 'u', xp: 10, level: 1 });
     cfg.economy.accounts.push({ userId: 'u', balance: 50, lastDaily: 0, lastWork: 0 });
+    cfg.dropdownroles.menus.push({ title: 'D', placeholder: 'pick', min: 0, max: 1, channelId: '1', messageId: '2', roles: [{ roleId: '9', label: 'A', emoji: '', description: '' }] });
+    cfg.scheduled.messages.push({ channelId: '1', content: 'hi', intervalMinutes: 60, lastRun: 0, embed: false });
     let panels = 0;
     const check = (name, payload) => {
         if (payload.components.length > 5) throw new Error(`${name}: ${payload.components.length} rows (>5)`);
@@ -2463,6 +3993,8 @@ if (require.main === module) {
     for (const s of SECTIONS) check(s.key, renderSection(s.key, cfg));
     check('selfroleMenu', PANELS._selfroleMenu(cfg, 0));
     check('selfRoleMessage', selfRoleMessage(cfg.selfroles.menus[0]));
+    check('dropdownMenu', PANELS._dropdownMenu(cfg, 0));
+    check('dropdownRoleMessage', dropdownRoleMessage(cfg.dropdownroles.menus[0], 0));
     check('overview', { components: [], embeds: overviewEmbed(cfg).embeds });
     console.log(`✅ setup self-test passed — ${panels} panels render valid components.`);
 }

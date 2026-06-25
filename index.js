@@ -68,8 +68,9 @@ const client = new Client({
         GatewayIntentBits.GuildMembers,
         GatewayIntentBits.DirectMessages, // needed to receive the verification captcha reply in DMs
         GatewayIntentBits.GuildMessageReactions, // reaction roles + starboard (/setup)
-        GatewayIntentBits.GuildVoiceStates,      // voice logging (/setup)
-        GatewayIntentBits.GuildModeration        // ban logging (/setup)
+        GatewayIntentBits.GuildVoiceStates,      // voice logging + temp voice (/setup)
+        GatewayIntentBits.GuildModeration,       // ban logging (/setup)
+        GatewayIntentBits.GuildInvites           // invite tracker (/setup)
     ],
     // Partials let us handle events on uncached messages/reactions/members.
     partials: [Partials.Channel, Partials.Message, Partials.Reaction, Partials.GuildMember, Partials.User]
@@ -125,9 +126,9 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
     }
 
-    // Setup PUBLIC components (self-role buttons, birthday registration) — these
-    // are used by ordinary members, so they skip the admin gate. Prefix "setpub:".
-    if ((interaction.isButton() || interaction.isModalSubmit())
+    // Setup PUBLIC components (self-role buttons, dropdown roles, birthday
+    // registration) — used by ordinary members, so they skip the admin gate.
+    if ((interaction.isButton() || interaction.isAnySelectMenu() || interaction.isModalSubmit())
         && interaction.customId?.startsWith('setpub:')) {
         const setupCmd = client.commands.get('setup');
         if (setupCmd?.handlePublic) return setupCmd.handlePublic(interaction);
