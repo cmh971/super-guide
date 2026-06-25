@@ -66,9 +66,13 @@ const client = new Client({
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.MessageContent,
         GatewayIntentBits.GuildMembers,
-        GatewayIntentBits.DirectMessages // needed to receive the verification captcha reply in DMs
+        GatewayIntentBits.DirectMessages, // needed to receive the verification captcha reply in DMs
+        GatewayIntentBits.GuildMessageReactions, // reaction roles + starboard (/setup)
+        GatewayIntentBits.GuildVoiceStates,      // voice logging (/setup)
+        GatewayIntentBits.GuildModeration        // ban logging (/setup)
     ],
-    partials: [Partials.Channel] // DM channels arrive as partials; without this, DM messages are dropped
+    // Partials let us handle events on uncached messages/reactions/members.
+    partials: [Partials.Channel, Partials.Message, Partials.Reaction, Partials.GuildMember, Partials.User]
 });
 client.commands = new Collection();
 
@@ -109,6 +113,24 @@ client.on(Events.InteractionCreate, async interaction => {
                 console.error('[interaction] could not send error reply:', replyErr.message);
             }
         }
+        return;
+    }
+
+    // Setup control panel — route all of its components/modals here (must run
+    // before the staff-only button gate below). customIds are prefixed "setup:".
+    if ((interaction.isButton() || interaction.isAnySelectMenu() || interaction.isModalSubmit())
+        && interaction.customId?.startsWith('setup:')) {
+        const setupCmd = client.commands.get('setup');
+        if (setupCmd?.handleInteraction) return setupCmd.handleInteraction(interaction);
+        return;
+    }
+
+    // Setup PUBLIC components (self-role buttons, birthday registration) — these
+    // are used by ordinary members, so they skip the admin gate. Prefix "setpub:".
+    if ((interaction.isButton() || interaction.isModalSubmit())
+        && interaction.customId?.startsWith('setpub:')) {
+        const setupCmd = client.commands.get('setup');
+        if (setupCmd?.handlePublic) return setupCmd.handlePublic(interaction);
         return;
     }
 
@@ -447,6 +469,11 @@ client.once(Events.ClientReady, async c => {
             const p = await presenceCmd.applyPresence(client);
             console.log(`Presence set: ${p.status} / ${p.typeKey} ${p.text}`);
         }
+
+        // Setup control panel: register its runtime enforcement (welcome,
+        // logging, autorole, filter, anti-spam/raid, reaction roles, etc.).
+        const setupCmd = client.commands.get('setup');
+        if (setupCmd?.init) setupCmd.init(client);
 
         // Staff dashboard bridge: DM server-picker + dashboard command executor.
         // Lives under /dashboard so the command loader above never touches it.

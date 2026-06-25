@@ -4,5 +4,5 @@ const { makeParent } = require('./tools/subcommand-router');
 
 module.exports = makeParent('random', 'Random pickers, dice & generators', [
     'randomemoji', 'randomhex', 'scrabble', 'wheel', 'chance', 'fromroman',
-    'd6', 'flipcoins', 'fortune',
+    'd6', 'flipcoins', 'fortune', 'coinflip',
 ]);

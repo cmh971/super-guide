@@ -23,7 +23,7 @@ const EXCLUDE = new Set([
 	'charinfo', 'dadjoke',
 	// → /random  (random pickers, dice, generators)
 	'randomemoji', 'randomhex', 'scrabble', 'wheel', 'chance', 'fromroman',
-	'd6', 'flipcoins', 'fortune',
+	'd6', 'flipcoins', 'fortune', 'coinflip',
 ]);
 
 const commands = [];
