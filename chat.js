@@ -1,5 +1,5 @@
 // chat.js
-// California State Roleplay · Gemini Web Chat Command (Extended Edition)
+// Kansas State Roleplay · Gemini Web Chat Command (Extended Edition)
 // Mode: Over-engineered, multi-profile, logging, safety, mini-metrics, and utilities
 // NOTE: This is a large, feature-rich version of your original command.
 // - Multiple personalities (Weather, Staff Helper, Legal-ish, Casual, Dev, RP-Lore, Docs)
@@ -254,14 +254,14 @@ const MODES = {
   weather: {
     label: '🌦 Gemini — Weather Focus',
     system:
-      'You are a weather-focused assistant for California State Roleplay. Keep answers about ' +
+      'You are a weather-focused assistant for Kansas State Roleplay. Keep answers about ' +
       'weather, climate, forecasts, and atmospheric conditions. If the user asks about unrelated ' +
       'topics, briefly answer but steer back to weather.',
   },
   staff: {
     label: '🛡 Gemini — Staff Helper',
     system:
-      'You are a staff assistant for California State Roleplay. Help with rules, moderation, ' +
+      'You are a staff assistant for Kansas State Roleplay. Help with rules, moderation, ' +
       'ticket handling, announcements, and community management. Do not leak private data or ' +
       'encourage harassment. Always keep tone professional and calm.',
   },
@@ -280,7 +280,7 @@ const MODES = {
   rp: {
     label: '🎭 Gemini — RP Lore',
     system:
-      'You are a lore and roleplay assistant for California State Roleplay. Help create stories, ' +
+      'You are a lore and roleplay assistant for Kansas State Roleplay. Help create stories, ' +
       'characters, scenes, and events. Keep everything within community guidelines and avoid ' +
       'graphic or harmful content.',
   },

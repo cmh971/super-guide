@@ -17,7 +17,8 @@ const {
 } = require('discord.js');
 
 const config = require('./config');
-const { ServerSelection, CommandJob, audit } = require('./db');
+const db = require('./db');
+const { ServerSelection, CommandJob, audit } = db;
 
 const POLL_MS = 3000;
 const BRAND = 0x5865f2;
@@ -226,9 +227,21 @@ async function pollJobs(client) {
 
 let started = false;
 
-function init(client) {
+async function init(client) {
   if (started) return;
   started = true;
+
+  // The bridge lives under /dashboard, so its require('mongoose') is a DIFFERENT
+  // instance than the bot's. Connect this one too, or every query buffers and
+  // times out (which then makes slash-command interactions expire).
+  if (db.mongoose.connection.readyState !== 1 && config.mongoUri) {
+    try {
+      await db.connect(config.mongoUri);
+      console.log('[bridge] connected dashboard mongoose');
+    } catch (err) {
+      console.error('[bridge] mongo connect failed:', err.message);
+    }
+  }
 
   // Listen for picker-button clicks (a separate listener, so we don't touch
   // the big interaction handler in index.js).

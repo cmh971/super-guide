@@ -1,6 +1,6 @@
 // giveaway.js
-// California State Roleplay · Hybrid Giveaway System (DB + Runtime Cache)
-// Style: California RP Blue Theme
+// Kansas State Roleplay · Hybrid Giveaway System (DB + Runtime Cache)
+// Style: Kansas RP Blue Theme
 //
 // Features:
 //  - Slash command: /giveaway
@@ -82,7 +82,7 @@ const activeGiveaways = new Map();
 // CONFIG
 // -----------------------------------------------------------------------------
 
-const DEFAULT_COLOR = '#3b82f6'; // California RP blue
+const DEFAULT_COLOR = '#3b82f6'; // Kansas RP blue
 const REACTION_EMOJI = '🎉';
 
 // -----------------------------------------------------------------------------

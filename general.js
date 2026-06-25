@@ -48,7 +48,7 @@ module.exports = {
         }
 
         if (sub === 'bot') {
-            return interaction.reply(`Running California RP Management Bot on **discord.js v14**.`);
+            return interaction.reply(`Running Kansas RP Management Bot on **discord.js v14**.`);
         }
 
         if (sub === 'help') {

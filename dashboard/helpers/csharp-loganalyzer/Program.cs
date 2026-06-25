@@ -206,7 +206,7 @@ internal static class Program
     {
         Console.ForegroundColor = ConsoleColor.Magenta;
         Console.WriteLine("==============================================");
-        Console.WriteLine("   California State Roleplay — Log Analyzer");
+        Console.WriteLine("   Kansas State Roleplay — Log Analyzer");
         Console.WriteLine("==============================================");
         Console.ResetColor();
     }

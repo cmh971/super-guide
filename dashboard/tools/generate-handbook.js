@@ -2,7 +2,7 @@
 
 /**
  * Generates public/handbook.html — a large, self-contained "Staff Handbook &
- * Command Reference" site for California State Roleplay.
+ * Command Reference" site for Kansas State Roleplay.
  *
  * It reads the bot's actual command files to build the command reference, then
  * adds policies, SOPs, FAQ, a glossary and a knowledge base. The file is sized
@@ -17,7 +17,7 @@ const path = require('node:path');
 const BOT_ROOT = path.join(__dirname, '..', '..');
 const OUT = path.join(__dirname, '..', 'public', 'handbook.html');
 const TARGET_LINES = 11000;
-const BRAND = 'California State Roleplay';
+const BRAND = 'Kansas State Roleplay';
 
 // ---------------------------------------------------------------------------
 // 1. Discover the real commands from the bot's *.js files.

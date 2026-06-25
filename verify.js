@@ -33,14 +33,35 @@ function randomWord() {
     return WORD_BANK[Math.floor(Math.random() * WORD_BANK.length)];
 }
 
+// Returns { ok: true } or { ok: false, reason } so callers can explain exactly
+// what went wrong (the usual culprit is role hierarchy).
 async function grantRole(member) {
     if (!VERIFIED_ROLE_ID || VERIFIED_ROLE_ID === 'PUT_VERIFIED_ROLE_ID_HERE') {
-        console.warn('[verify] VERIFIED_ROLE_ID is not configured.');
-        return false;
+        return { ok: false, reason: 'unconfigured' };
     }
-    await member.roles.add(VERIFIED_ROLE_ID);
-    return true;
+    const guild = member.guild;
+    const me = guild.members.me;
+    const role = guild.roles.cache.get(VERIFIED_ROLE_ID);
+    if (!role) return { ok: false, reason: 'missing_role' };
+    if (!me?.permissions.has(PermissionFlagsBits.ManageRoles)) return { ok: false, reason: 'no_perm' };
+    // The bot can only assign roles positioned BELOW its own highest role.
+    if (me.roles.highest.comparePositionTo(role) <= 0) return { ok: false, reason: 'hierarchy' };
+    try {
+        await member.roles.add(role);
+        return { ok: true };
+    } catch (err) {
+        console.error('[verify] roles.add failed:', err);
+        return { ok: false, reason: 'error' };
+    }
 }
+
+const GRANT_FAIL_MESSAGES = {
+    unconfigured: '⚠️ The verified role isn\'t configured yet. Please contact an admin.',
+    missing_role: '⚠️ The verified role no longer exists. Please contact an admin.',
+    no_perm: '⚠️ I\'m missing the **Manage Roles** permission. An admin needs to enable it for me.',
+    hierarchy: '⚠️ My role is **below** the verified role, so Discord won\'t let me assign it. An admin needs to drag my bot role **above** the verified role in Server Settings → Roles.',
+    error: '⚠️ I couldn\'t assign your role. Please contact an admin.'
+};
 
 module.exports = {
     VERIFIED_ROLE_ID,
@@ -123,23 +144,15 @@ module.exports = {
             return message.reply('⚠️ I couldn\'t find you in the server anymore. Please rejoin and try again.');
         }
 
-        try {
-            const ok = await grantRole(member);
-            if (!ok) return message.reply('⚠️ Verification role isn\'t configured yet. Please contact an admin.');
-            return message.reply(`✅ You're verified in **${guild.name}**! Welcome aboard.`);
-        } catch (err) {
-            console.error('[verify] failed to add role:', err);
-            return message.reply('⚠️ I couldn\'t assign your role (missing permissions?). Please contact an admin.');
-        }
+        const res = await grantRole(member);
+        if (res.ok) return message.reply(`✅ You're verified in **${guild.name}**! Welcome aboard.`);
+        return message.reply(GRANT_FAIL_MESSAGES[res.reason] || GRANT_FAIL_MESSAGES.error);
     },
 
     // New member joins: bots skip the captcha and are verified automatically.
     async autoVerifyBot(member) {
         if (!member.user.bot) return;
-        try {
-            await grantRole(member);
-        } catch (err) {
-            console.error('[verify] failed to auto-verify bot:', err);
-        }
+        const res = await grantRole(member);
+        if (!res.ok) console.warn('[verify] could not auto-verify bot:', res.reason);
     }
 };

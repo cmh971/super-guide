@@ -1,6 +1,6 @@
 /**
  * @file staff-app.js
- * @description Staff Application Setup for California State Roleplay.
+ * @description Staff Application Setup for Kansas State Roleplay.
  * Generates approximately 500 lines of logic when combined with index.js handlers.
  */
 
@@ -33,9 +33,9 @@ module.exports = {
         const embed = new EmbedBuilder()
             .setTitle('📝 Staff Applications')
             .setDescription(
-                'Welcome to the California State Roleplay Staff Application portal.\n\n' +
+                'Welcome to the Kansas State Roleplay Staff Application portal.\n\n' +
                 '**Requirements:**\n' +
-                '• Must be 15+ years of age.\n' +
+                '• Must be 13+ years of age.\n' +
                 '• Must have a clear record.\n' +
                 '• Must have a working microphone.\n\n' +
                 'Click the button below to start your application. You will be asked **11 questions** across 3 stages.'

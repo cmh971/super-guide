@@ -1,6 +1,6 @@
 // user.js
-// California State Roleplay · Advanced User Info
-// Styles mixed: Max Info + Clean + California RP + Hacker Mode
+// Kansas State Roleplay · Advanced User Info
+// Styles mixed: Max Info + Clean + Kansas RP + Hacker Mode
 
 const {
     SlashCommandBuilder,

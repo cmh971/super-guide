@@ -80,7 +80,7 @@ function goMonitorCommand() {
 
 function banner() {
   console.log('========================================================');
-  console.log('  🌴 California State Roleplay — full stack launcher');
+  console.log('  🌴 Kansas State Roleplay — full stack launcher');
   console.log('========================================================');
 }
 

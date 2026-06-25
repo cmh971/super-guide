@@ -1,6 +1,6 @@
 /**
  * @file ticket-setup.js
- * @description Advanced Ticket System Setup for California State Roleplay.
+ * @description Advanced Ticket System Setup for Kansas State Roleplay.
  * This file handles the generation of the interactive support panel.
  * 
  * Requirements:
@@ -65,7 +65,7 @@ module.exports = {
          * Emojis and footer icons have been removed per request.
          */
         const setupEmbed = new EmbedBuilder()
-            .setTitle('🎫 California State Roleplay Support')
+            .setTitle('🎫 Kansas State Roleplay Support')
             .setDescription(
                 '**General Support**\n' +
                 '• Community questions\n' +
@@ -85,7 +85,7 @@ module.exports = {
                 '• High-level assistance'
             )
             .setFooter({ 
-                text: 'California State Roleplay Support' 
+                text: 'Kansas State Roleplay Support' 
                 // iconURL removed per request
             })
             .setColor(embedColor);

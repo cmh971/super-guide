@@ -1,5 +1,5 @@
 /**
- * filter.js — Smart word filter for California State Roleplay.
+ * filter.js — Smart word filter for Kansas State Roleplay.
  *
  * ⚠️  GENERATED FILE. Edit tools/filter.template.js and run
  *     `node tools/build-filter.js` to regenerate. Do not hand-edit or it will be overwritten bc it may amke the bot blow up.

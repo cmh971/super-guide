@@ -1,5 +1,5 @@
 // erlc.js
-// California State Roleplay · ERLC API Integration
+// Kansas State Roleplay · ERLC API Integration
 
 const { SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits } = require('discord.js');
 const mongoose = require('mongoose');

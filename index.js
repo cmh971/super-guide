@@ -99,9 +99,15 @@ client.on(Events.InteractionCreate, async interaction => {
             await command.execute(interaction);
         } catch (error) {
             console.error(error);
+            // Replying can itself fail (e.g. the interaction already expired) —
+            // never let that throw, or it becomes an unhandled error and crashes the bot.
             const replyOptions = { content: 'There was an error while executing this command!', flags: [MessageFlags.Ephemeral] };
-            if (interaction.replied || interaction.deferred) await interaction.followUp(replyOptions);
-            else await interaction.reply(replyOptions);
+            try {
+                if (interaction.replied || interaction.deferred) await interaction.followUp(replyOptions);
+                else await interaction.reply(replyOptions);
+            } catch (replyErr) {
+                console.error('[interaction] could not send error reply:', replyErr.message);
+            }
         }
         return;
     }
@@ -435,6 +441,13 @@ client.once(Events.ClientReady, async c => {
             console.log('Restored active giveaways.');
         }
 
+        // Apply the saved (or default "Watching over the trees") presence.
+        const presenceCmd = client.commands.get('presence');
+        if (presenceCmd?.applyPresence) {
+            const p = await presenceCmd.applyPresence(client);
+            console.log(`Presence set: ${p.status} / ${p.typeKey} ${p.text}`);
+        }
+
         // Staff dashboard bridge: DM server-picker + dashboard command executor.
         // Lives under /dashboard so the command loader above never touches it.
         try {
@@ -444,5 +457,10 @@ client.once(Events.ClientReady, async c => {
         }
     }
 });
+
+// --- Global safety nets: keep the bot alive instead of crashing on a stray error ---
+client.on('error', err => console.error('[client error]', err));
+process.on('unhandledRejection', err => console.error('[unhandledRejection]', err));
+process.on('uncaughtException', err => console.error('[uncaughtException]', err));
 
 client.login(process.env.DISCORD_TOKEN);

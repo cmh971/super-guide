@@ -17,7 +17,7 @@ const path = require('node:path');
 const BOT_ROOT = path.join(__dirname, '..', '..');
 const OUT = path.join(__dirname, '..', 'public', 'dashboard.html');
 const TARGET_LINES = 5000;
-const BRAND = 'California State Roleplay Staff';
+const BRAND = 'Kansas State Roleplay Staff';
 
 // ---------------------------------------------------------------------------
 // Discover real commands (name, description, options) from the bot's *.js.
