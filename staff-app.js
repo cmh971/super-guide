@@ -4,23 +4,29 @@
  * Generates approximately 500 lines of logic when combined with index.js handlers.
  */
 
-const { 
-    SlashCommandBuilder, 
-    EmbedBuilder, 
-    ActionRowBuilder, 
-    ButtonBuilder, 
-    ButtonStyle, 
+const {
+    SlashCommandBuilder,
+    EmbedBuilder,
+    ActionRowBuilder,
+    ButtonBuilder,
+    ButtonStyle,
     PermissionFlagsBits,
-    ChannelType
+    ChannelType,
+    MessageFlags
 } = require('discord.js');
 
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('staff-app-setup')
         .setDescription('Deploys the Staff Application entry panel.')
+        .setDMPermission(false)
         .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 
     async execute(interaction) {
+        // This command creates channels, so it must run inside a guild.
+        if (!interaction.guild) {
+            return interaction.reply({ content: '❌ This command can only be used in a server.', flags: [MessageFlags.Ephemeral] });
+        }
         // Ensure a category exists for review channels
         let category = interaction.guild.channels.cache.find(c => c.name === 'Staff Apps' && c.type === ChannelType.GuildCategory);
         if (!category) {

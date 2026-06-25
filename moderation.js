@@ -1,4 +1,4 @@
-const { SlashCommandBuilder, PermissionFlagsBits, EmbedBuilder, ChannelType } = require('discord.js');
+const { SlashCommandBuilder, PermissionFlagsBits, EmbedBuilder, ChannelType, MessageFlags } = require('discord.js');
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -19,25 +19,31 @@ module.exports = {
     async execute(interaction) {
         const sub = interaction.options.getSubcommand();
         const { guild, channel } = interaction;
+        if (!guild) return interaction.reply({ content: '❌ This command can only be used in a server.', flags: [MessageFlags.Ephemeral] });
 
+        try {
         if (sub === 'clear') {
             const amount = interaction.options.getInteger('amount');
             await channel.bulkDelete(Math.min(amount, 100), true);
-            return interaction.reply({ content: `Deleted ${amount} messages.`, ephemeral: true });
+            return interaction.reply({ content: `Deleted ${amount} messages.`, flags: [MessageFlags.Ephemeral] });
         }
 
         if (sub === 'kick') {
             const user = interaction.options.getUser('target');
             const reason = interaction.options.getString('reason') || 'No reason';
+            const m = await guild.members.fetch(user.id).catch(() => null);
+            if (m && !m.kickable) return interaction.reply({ content: `❌ I can't kick ${user.tag} — their role is higher than mine, or I lack Kick Members.`, flags: [MessageFlags.Ephemeral] });
             await guild.members.kick(user, reason);
-            return interaction.reply({ content: `Kicked ${user.tag} | ${reason}` });
+            return interaction.reply({ content: `👢 Kicked ${user.tag} | ${reason}` });
         }
 
         if (sub === 'ban') {
             const user = interaction.options.getUser('target');
             const reason = interaction.options.getString('reason') || 'No reason';
+            const m = await guild.members.fetch(user.id).catch(() => null);
+            if (m && !m.bannable) return interaction.reply({ content: `❌ I can't ban ${user.tag} — their role is higher than mine, or I lack Ban Members.`, flags: [MessageFlags.Ephemeral] });
             await guild.members.ban(user, { reason });
-            return interaction.reply({ content: `Banned ${user.tag} | ${reason}` });
+            return interaction.reply({ content: `🔨 Banned ${user.tag} | ${reason}` });
         }
 
         if (sub === 'unban') {
@@ -78,8 +84,17 @@ module.exports = {
         if (sub === 'nickname') {
             const target = interaction.options.getMember('target');
             const nick = interaction.options.getString('nick');
+            if (target && !target.manageable) return interaction.reply({ content: `❌ I can't change ${target.user.tag}'s nickname — their role is higher than mine.`, flags: [MessageFlags.Ephemeral] });
             await target.setNickname(nick);
             return interaction.reply({ content: `Nickname changed to: ${nick || 'Reset'}` });
+        }
+        } catch (err) {
+            // Turn raw Discord API errors (missing perms, hierarchy, etc.) into a clean reply.
+            const msg = err?.code === 50013
+                ? "❌ I'm missing permissions for that — check my role position and that I have the required permission."
+                : `❌ Action failed: ${err.message}`;
+            const payload = { content: msg, flags: [MessageFlags.Ephemeral] };
+            return (interaction.replied || interaction.deferred ? interaction.followUp(payload) : interaction.reply(payload)).catch(() => null);
         }
     }
 };
